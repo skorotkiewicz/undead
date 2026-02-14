@@ -1,0 +1,159 @@
+# 🧟 Undead - LLM Chat Client
+
+A simple and elegant CLI chat application for OpenAI-compatible APIs. Perfect for interacting with local LLM servers like llama.cpp, ollama, text-generation-webui, and more.
+
+## Features
+
+- 🎯 **Simple & Elegant** - Clean, intuitive CLI interface
+- 💬 **Interactive Chat** - Real-time conversation with conversation history
+- 🌊 **Streaming Responses** - See responses as they're generated
+- 🎨 **Colored Output** - Beautiful, readable terminal output
+- 🔧 **Flexible Configuration** - Customize API endpoint, model, temperature, and more
+- 📜 **Conversation History** - Maintains context throughout the chat session
+- 🔐 **API Key Support** - Works with both local and remote APIs
+
+## Installation
+
+```bash
+cargo build --release
+```
+
+The binary will be available at `target/release/undead`.
+
+## Quick Start
+
+### Basic Usage (Local Server)
+
+```bash
+./undead
+```
+
+This connects to `http://localhost:8080/v1` by default.
+
+### With Custom API Endpoint
+
+```bash
+./undead --endpoint http://localhost:11434/v1 --model llama2
+```
+
+### With API Key (Remote Services)
+
+```bash
+./undead --endpoint https://api.openai.com/v1 --api-key sk-your-key-here --model gpt-3.5-turbo
+```
+
+## Command Line Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--endpoint` | `-e` | `http://localhost:8080/v1` | API base endpoint |
+| `--model` | `-m` | `local-model` | Model to use for chat |
+| `--api-key` | `-k` | (empty) | API key (optional for local servers) |
+| `--system` | `-s` | `You are a helpful assistant.` | System prompt |
+| `--temperature` | (none) | `0.7` | Response randomness (0.0-2.0) |
+| `--max-tokens` | `-t` | `2048` | Maximum tokens in response |
+
+## Interactive Commands
+
+During a chat session, you can use these commands:
+
+- `exit`, `quit`, or `q` - Exit the application
+- `clear` - Clear conversation history
+
+## Examples
+
+### Using with llama.cpp
+
+```bash
+# Start llama.cpp server
+./server -m model.gguf --port 8080
+
+# Connect with undead
+./undead --endpoint http://localhost:8080/v1
+```
+
+### Using with Ollama
+
+```bash
+# Start Ollama
+ollama serve
+
+# Connect with undead
+./undead --endpoint http://localhost:11434/v1 --model llama2
+```
+
+### Using with text-generation-webui
+
+```bash
+# Start text-generation-webui with OpenAI extension
+python server.py --extensions openai
+
+# Connect with undead
+./undead --endpoint http://localhost:5000/v1
+```
+
+### Using with OpenAI API
+
+```bash
+./undead \
+  --endpoint https://api.openai.com/v1 \
+  --api-key sk-your-api-key \
+  --model gpt-3.5-turbo \
+  --temperature 0.8
+```
+
+### Custom System Prompt
+
+```bash
+./undead --system "You are a Rust programming expert. Provide concise, accurate answers."
+```
+
+## Configuration Examples
+
+### Creative Writing Assistant
+
+```bash
+./undead \
+  --temperature 1.2 \
+  --system "You are a creative writing assistant. Be imaginative and inspiring."
+```
+
+### Code Review Assistant
+
+```bash
+./undead \
+  --temperature 0.3 \
+  --system "You are a code reviewer. Focus on best practices, security, and performance."
+```
+
+## Keyboard Shortcuts
+
+- `Ctrl+C` - Exit the application
+- `Enter` - Send message
+
+## Requirements
+
+- Rust 1.70 or later
+- An OpenAI-compatible API server (local or remote)
+
+## Supported API Servers
+
+Any server that implements the OpenAI Chat Completions API:
+
+- llama.cpp
+- Ollama
+- text-generation-webui
+- vLLM
+- LocalAI
+- OpenAI API
+- Azure OpenAI
+- Anthropic (via proxy)
+- And many more!
+
+## License
+
+MIT
+
+## Contributing
+
+Contributions are welcome! Feel free to submit issues and pull requests.
