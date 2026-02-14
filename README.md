@@ -61,8 +61,8 @@ cargo build --release
 | `-T, --max-tokens` | `2048` | `UNDEAD_MAX_TOKENS` | Max tokens |
 | `-w, --workspace` | - | `UNDEAD_WORKSPACE` | Workspace directory |
 | `-c, --mcp` | - | `UNDEAD_MCP` | MCP config file |
-| `-C, --config` | - | - | Config file path |
-| `-p, --preset` | - | - | Preset name |
+| `-C, --config` | - | `UNDEAD_CONFIG` | Config file path |
+| `-p, --preset` | - | `UNDEAD_PRESET` | Preset name |
 
 ## Config & Presets
 
@@ -88,6 +88,8 @@ UNDEAD_TEMPERATURE: ""
 UNDEAD_MAX_TOKENS: ""
 UNDEAD_WORKSPACE: ""
 UNDEAD_MCP: ""
+UNDEAD_CONFIG: ""
+UNDEAD_PRESET: ""
 
 presets:
   "mylocal":

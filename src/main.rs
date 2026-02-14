@@ -65,11 +65,11 @@ struct Args {
     mcp: Option<PathBuf>,
 
     /// Configuration file path
-    #[arg(short = 'C', long, value_name = "PATH")]
+    #[arg(short = 'C', long, value_name = "PATH", env = "UNDEAD_CONFIG")]
     config: Option<PathBuf>,
 
     /// Preset name from config file
-    #[arg(short = 'p', long)]
+    #[arg(short = 'p', long, env = "UNDEAD_PRESET")]
     preset: Option<String>,
 
     /// Version
