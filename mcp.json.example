@@ -8,7 +8,7 @@
     "context7": {
       "command": "bunx",
       "args": ["-y", "@upstash/context7-mcp", "--api-key", "ctx7sk-..."],
-      "enabled": true
+      "enabled": false
     },
     "filesystem": {
       "type": "local",
