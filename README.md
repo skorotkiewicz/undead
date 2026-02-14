@@ -56,6 +56,45 @@ cargo build --release
 | `-T, --max-tokens` | `2048` | `UNDEAD_MAX_TOKENS` | Max tokens |
 | `-w, --workspace` | - | `UNDEAD_WORKSPACE` | Workspace directory |
 | `-c, --mcp` | - | `UNDEAD_MCP` | MCP config file |
+| `-C, --config` | - | - | Config file path |
+| `-p, --preset` | - | - | Preset name |
+
+## Config & Presets
+
+Use a config file to manage multiple API configurations:
+
+```bash
+# Use config with preset
+./undead -C ./config.yml -p mylocal
+
+# Use config without preset (uses global values)
+./undead -C ./config.yml
+```
+
+**Config file format (`config.yml`):**
+
+```yaml
+# Global defaults
+UNDEAD_ENDPOINT: "https://openrouter.ai/api/v1"
+UNDEAD_MODEL: "x-ai/grok-4-fast"
+UNDEAD_API_KEY: ""
+UNDEAD_SYSTEM: ""
+UNDEAD_TEMPERATURE: ""
+UNDEAD_MAX_TOKENS: ""
+UNDEAD_WORKSPACE: ""
+UNDEAD_MCP: ""
+
+presets:
+  "mylocal":
+    UNDEAD_ENDPOINT: "http://192.168.0.124:8888/v1"
+    UNDEAD_MODEL: "local-model"
+    
+  "openrouter":
+    UNDEAD_ENDPOINT: "https://openrouter.ai/api/v1"
+    UNDEAD_MODEL: "x-ai/grok-4-fast"
+```
+
+**Priority:** CLI args > Config preset > Config global > Environment variables > Defaults
 
 ## Workspace
 

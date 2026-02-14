@@ -11,6 +11,7 @@ use rmcp::transport::streamable_http_client::StreamableHttpClientTransport;
 use rmcp::{Peer, RoleClient, Service, serve_client};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::env;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -63,9 +64,24 @@ struct Args {
     #[arg(short = 'c', long, value_name = "PATH", env = "UNDEAD_MCP")]
     mcp: Option<PathBuf>,
 
+    /// Configuration file path
+    #[arg(short = 'C', long, value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    /// Preset name from config file
+    #[arg(short = 'p', long)]
+    preset: Option<String>,
+
     /// Version
     #[arg(short = 'V', long)]
     version: bool,
+}
+
+#[derive(Deserialize, Debug)]
+struct ConfigFile {
+    #[serde(flatten)]
+    global: HashMap<String, String>,
+    presets: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Serialize, Debug)]
@@ -1014,11 +1030,128 @@ impl ChatApp {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
+    let mut args = Args::parse();
+
     if args.version {
         println!("{}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+
+    // Load config file if specified
+    if let Some(config_path) = &args.config {
+        if let Ok(config_content) = std::fs::read_to_string(config_path) {
+            if let Ok(config) = serde_yaml::from_str::<ConfigFile>(&config_content) {
+                // Validate preset exists if specified
+                if let Some(preset_name) = &args.preset {
+                    if !config.presets.contains_key(preset_name) {
+                        eprintln!(
+                            "{} Preset '{}' not found. Available presets: {}",
+                            "Error:".red(),
+                            preset_name,
+                            config
+                                .presets
+                                .keys()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                        std::process::exit(1);
+                    }
+                }
+
+                // Helper function to apply config value
+                // Priority: CLI args > Config preset > Config global > Environment variables
+                let apply_config = |key: &str, env_name: &str| -> Option<String> {
+                    // Check preset (if specified and exists)
+                    if let Some(preset_name) = &args.preset {
+                        if let Some(preset) = config.presets.get(preset_name) {
+                            if let Some(value) = preset.get(key) {
+                                if !value.is_empty() {
+                                    return Some(value.clone());
+                                }
+                            }
+                        }
+                    }
+                    // Check global (only if no preset or preset value was empty)
+                    if args.preset.is_none() {
+                        if let Some(value) = config.global.get(key) {
+                            if !value.is_empty() {
+                                return Some(value.clone());
+                            }
+                        }
+                    }
+                    // Check environment variable
+                    if let Ok(value) = env::var(env_name) {
+                        if !value.is_empty() {
+                            return Some(value);
+                        }
+                    }
+                    None
+                };
+
+                // Apply config values (only if CLI arg was not explicitly provided)
+                // Check if arg was provided by comparing with default value
+                let default_args = Args::parse_from(std::iter::empty::<String>());
+
+                if args.endpoint == default_args.endpoint {
+                    if let Some(endpoint) = apply_config("UNDEAD_ENDPOINT", "UNDEAD_ENDPOINT") {
+                        args.endpoint = endpoint;
+                    }
+                }
+                if args.model == default_args.model {
+                    if let Some(model) = apply_config("UNDEAD_MODEL", "UNDEAD_MODEL") {
+                        args.model = model;
+                    }
+                }
+                if args.api_key == default_args.api_key {
+                    if let Some(api_key) = apply_config("UNDEAD_API_KEY", "UNDEAD_API_KEY") {
+                        args.api_key = api_key;
+                    }
+                }
+                if args.system == default_args.system {
+                    if let Some(system) = apply_config("UNDEAD_SYSTEM", "UNDEAD_SYSTEM") {
+                        args.system = system;
+                    }
+                }
+                if (args.temperature - default_args.temperature).abs() < f32::EPSILON {
+                    if let Some(temperature) =
+                        apply_config("UNDEAD_TEMPERATURE", "UNDEAD_TEMPERATURE")
+                    {
+                        if let Ok(temp) = temperature.parse() {
+                            args.temperature = temp;
+                        }
+                    }
+                }
+                if args.max_tokens == default_args.max_tokens {
+                    if let Some(max_tokens) = apply_config("UNDEAD_MAX_TOKENS", "UNDEAD_MAX_TOKENS")
+                    {
+                        if let Ok(tokens) = max_tokens.parse() {
+                            args.max_tokens = tokens;
+                        }
+                    }
+                }
+                if args.workspace == default_args.workspace {
+                    if let Some(workspace) = apply_config("UNDEAD_WORKSPACE", "UNDEAD_WORKSPACE") {
+                        args.workspace = Some(PathBuf::from(workspace));
+                    }
+                }
+                if args.mcp == default_args.mcp {
+                    if let Some(mcp) = apply_config("UNDEAD_MCP", "UNDEAD_MCP") {
+                        args.mcp = Some(PathBuf::from(mcp));
+                    }
+                }
+            } else {
+                eprintln!("{} Failed to parse config file", "Warning:".yellow());
+            }
+        } else {
+            eprintln!(
+                "{} Failed to read config file: {}",
+                "Warning:".yellow(),
+                config_path.display()
+            );
+        }
+    }
+
     let mut app = ChatApp::new(args);
 
     // Initialize MCP servers if configured
