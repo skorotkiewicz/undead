@@ -34,16 +34,16 @@ cargo build --release
 
 ## Options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `-e, --endpoint` | `http://localhost:8080/v1` | API endpoint |
-| `-m, --model` | `local-model` | Model name |
-| `-k, --api-key` | - | API key |
-| `-s, --system` | `You are a helpful assistant.` | System prompt |
-| `--temperature` | `0.7` | Temperature (0.0-2.0) |
-| `-t, --max-tokens` | `2048` | Max tokens |
-| `-w, --workspace` | - | Workspace directory |
-| `--mcp` | - | MCP config file |
+| Option | Default | Env | Description |
+|--------|---------|-----|-------------|
+| `-e, --endpoint` | `http://localhost:8080/v1` | `UNDEAD_ENDPOINT` | API endpoint |
+| `-m, --model` | `local-model` | `UNDEAD_MODEL` | Model name |
+| `-k, --api-key` | - | `UNDEAD_API_KEY` | API key |
+| `-s, --system` | `You are a helpful assistant.` | `UNDEAD_SYSTEM` | System prompt |
+| `--temperature` | `0.7` | `UNDEAD_TEMPERATURE` | Temperature (0.0-2.0) |
+| `-t, --max-tokens` | `2048` | `UNDEAD_MAX_TOKENS` | Max tokens |
+| `-w, --workspace` | - | `UNDEAD_WORKSPACE` | Workspace directory |
+| `--mcp` | - | `UNDEAD_MCP` | MCP config file |
 
 ## Workspace
 

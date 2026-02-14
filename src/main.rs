@@ -22,35 +22,35 @@ use tokio::sync::RwLock;
 #[command(about = "Chat with OpenAI-compatible LLM APIs", long_about = None)]
 struct Args {
     /// API base endpoint
-    #[arg(short, long, default_value = "http://localhost:8080/v1")]
+    #[arg(short, long, default_value = "http://localhost:8080/v1", env = "UNDEAD_ENDPOINT")]
     endpoint: String,
 
     /// Model to use for chat
-    #[arg(short, long, default_value = "local-model")]
+    #[arg(short, long, default_value = "local-model", env = "UNDEAD_MODEL")]
     model: String,
 
     /// API key (optional)
-    #[arg(short, long, default_value = "dummy-key")]
+    #[arg(short, long, default_value = "dummy-key", env = "UNDEAD_API_KEY")]
     api_key: String,
 
     /// System prompt to set the assistant's behavior
-    #[arg(short, long, default_value = "You are a helpful assistant.")]
+    #[arg(short, long, default_value = "You are a helpful assistant.", env = "UNDEAD_SYSTEM")]
     system: String,
 
     /// Temperature for response randomness (0.0 - 2.0)
-    #[arg(short, long, default_value = "0.7")]
+    #[arg(short, long, default_value = "0.7", env = "UNDEAD_TEMPERATURE")]
     temperature: f32,
 
     /// Maximum tokens in the response
-    #[arg(short = 't', long, default_value = "2048")]
+    #[arg(short = 't', long, default_value = "2048", env = "UNDEAD_MAX_TOKENS")]
     max_tokens: u32,
 
     /// Workspace directory for file operations (enables file tools)
-    #[arg(short, long, value_name = "PATH")]
+    #[arg(short, long, value_name = "PATH", env = "UNDEAD_WORKSPACE")]
     workspace: Option<PathBuf>,
 
     /// MCP configuration file path (enables MCP tools)
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", env = "UNDEAD_MCP")]
     mcp: Option<PathBuf>,
 }
 
