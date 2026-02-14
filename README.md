@@ -2,6 +2,8 @@
 
 A minimal CLI chat client for OpenAI-compatible APIs with workspace and MCP support.
 
+![intro.png](docs/intro.png)
+
 ## Installation
 
 ```bash
