@@ -1,0 +1,98 @@
+{
+  "mcp_servers": {
+    "city": {
+      "type": "remote",
+      "url": "https://mcp.example.com/mcp?key=sk_5af",
+      "enabled": false
+    },
+    "context7": {
+      "command": "bunx",
+      "args": ["-y", "@upstash/context7-mcp", "--api-key", "ctx7sk-..."],
+      "enabled": true
+    },
+    "filesystem": {
+      "type": "local",
+      "command": "mcp-server-filesystem",
+      "args": ["--root", "/home/user/documents"],
+      "env": {},
+      "enabled": false
+    },
+    "github": {
+      "type": "local",
+      "command": "mcp-server-github",
+      "args": [],
+      "env": {
+        "GITHUB_TOKEN": "your-github-token-here"
+      },
+      "enabled": false
+    },
+    "postgres": {
+      "type": "local",
+      "command": "mcp-server-postgres",
+      "args": ["postgres://user:password@localhost:5432/mydb"],
+      "env": {},
+      "enabled": false
+    },
+    "brave-search": {
+      "type": "local",
+      "command": "mcp-server-brave-search",
+      "args": [],
+      "env": {
+        "BRAVE_API_KEY": "your-brave-api-key-here"
+      },
+      "enabled": false
+    },
+    "git": {
+      "type": "local",
+      "command": "mcp-server-git",
+      "args": ["--repository", "/home/user/projects/myproject"],
+      "env": {},
+      "enabled": false
+    },
+    "google-drive": {
+      "type": "local",
+      "command": "mcp-server-gdrive",
+      "args": [],
+      "env": {
+        "GOOGLE_CREDENTIALS": "/path/to/credentials.json"
+      },
+      "enabled": false
+    },
+    "slack": {
+      "type": "local",
+      "command": "mcp-server-slack",
+      "args": [],
+      "env": {
+        "SLACK_BOT_TOKEN": "xoxb-your-bot-token",
+        "SLACK_APP_TOKEN": "xapp-your-app-token"
+      },
+      "enabled": false
+    },
+    "puppeteer": {
+      "type": "local",
+      "command": "mcp-server-puppeteer",
+      "args": [],
+      "env": {},
+      "enabled": false
+    },
+    "memory": {
+      "type": "local",
+      "command": "mcp-server-memory",
+      "args": [],
+      "env": {},
+      "enabled": false
+    },
+    "weather": {
+      "type": "remote",
+      "url": "https://api.weather-mcp.example.com/mcp",
+      "enabled": false
+    },
+    "disabled-server": {
+      "type": "local",
+      "command": "mcp-server-example",
+      "args": [],
+      "env": {},
+      "enabled": false
+    }
+  }
+}

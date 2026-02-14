@@ -2,6 +2,8 @@
 
 A simple and elegant CLI chat application for OpenAI-compatible APIs. Perfect for interacting with local LLM servers like llama.cpp, ollama, text-generation-webui, and more.
 
+![intro.png](docs/intro.png)
+
 ## Features
 
 - 🎯 **Simple & Elegant** - Clean, intuitive CLI interface
@@ -53,6 +55,7 @@ This connects to `http://localhost:8080/v1` by default.
 | `--temperature` | (none) | `0.7` | Response randomness (0.0-2.0) |
 | `--max-tokens` | `-t` | `2048` | Maximum tokens in response |
 | `--workspace` | `-w` | (none) | Workspace directory for file operations |
+| `--mcp` | (none) | (none) | MCP configuration file path |
 
 ## Workspace Feature
 
@@ -86,6 +89,77 @@ All file operations are restricted to the workspace directory. The application v
 # You: "Create a new file called test.txt with 'Hello World'"
 # Assistant: [Uses write_file tool]
 ```
+
+## MCP Feature
+
+Model Context Protocol (MCP) support allows the LLM to connect to external tool servers. This extends the capabilities beyond file operations to include databases, APIs, web scraping, and more.
+
+### MCP Configuration File
+
+Create a JSON configuration file (e.g., `mcp.json`) with your MCP servers:
+
+```json
+{
+  "mcp_servers": {
+    "city": {
+      "type": "remote",
+      "url": "https://mcp.example.com/mcp?key=sk_5af",
+      "enabled": true
+    },
+    "filesystem": {
+      "type": "local",
+      "command": "mcp-server-filesystem",
+      "args": ["--root", "/home/user/documents"],
+      "env": {},
+      "enabled": true
+    },
+    "github": {
+      "type": "local",
+      "command": "mcp-server-github",
+      "args": [],
+      "env": {
+        "GITHUB_TOKEN": "your-github-token-here"
+      },
+      "enabled": true
+    },
+    "postgres": {
+      "type": "local",
+      "command": "mcp-server-postgres",
+      "args": ["postgres://user:password@localhost:5432/mydb"],
+      "env": {},
+      "enabled": true
+    }
+  }
+}
+```
+
+### Using MCP
+
+```bash
+# Enable MCP tools
+./undead --mcp ./mcp.json
+
+# Combine with workspace
+./undead --workspace ./my-project --mcp ./mcp.json
+```
+
+### MCP Server Types
+
+**Local MCP Servers** run as processes on your machine:
+
+- `type`: "local" (optional, default)
+- `command`: The executable command to run
+- `args`: Command-line arguments (optional)
+- `env`: Environment variables (optional)
+- `enabled`: Whether the server is active (default: true)
+
+**Remote MCP Servers** are hosted services accessible via HTTP:
+
+- `type`: "remote" (required for remote servers)
+- `url`: The HTTP endpoint for the MCP server
+- `enabled`: Whether the server is active (default: true)
+
+See the [MCP documentation](https://modelcontextprotocol.io) for more servers and details.
 
 ## Interactive Commands
 

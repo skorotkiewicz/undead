@@ -4,9 +4,17 @@ use colored::Colorize;
 use dialoguer::{Input, theme::ColorfulTheme};
 use futures_util::StreamExt;
 use reqwest::Client;
+use rmcp::model::Tool as McpTool;
+use rmcp::service::RunningService;
+use rmcp::transport::TokioChildProcess;
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransport;
+use rmcp::{Peer, RoleClient, Service, serve_client};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// A simple CLI chat application for OpenAI-compatible APIs
 #[derive(Parser, Debug)]
@@ -40,6 +48,10 @@ struct Args {
     /// Workspace directory for file operations (enables file tools)
     #[arg(short, long, value_name = "PATH")]
     workspace: Option<PathBuf>,
+
+    /// MCP configuration file path (enables MCP tools)
+    #[arg(long, value_name = "PATH")]
+    mcp: Option<PathBuf>,
 }
 
 #[derive(Serialize, Debug)]
@@ -124,12 +136,131 @@ struct DeltaFunction {
     arguments: Option<String>,
 }
 
+#[derive(Deserialize, Debug)]
+struct McpConfig {
+    mcp_servers: HashMap<String, McpServerConfig>,
+}
+
+#[derive(Deserialize, Debug)]
+struct McpServerConfig {
+    #[serde(rename = "type")]
+    server_type: Option<String>,
+    command: Option<String>,
+    args: Option<Vec<String>>,
+    env: Option<HashMap<String, String>>,
+    url: Option<String>,
+    enabled: Option<bool>,
+}
+
+struct McpClient {
+    name: String,
+    peer: Peer<RoleClient>,
+    tools: Vec<McpTool>,
+    #[allow(dead_code)]
+    service: RunningService<RoleClient, ClientHandler>,
+}
+
+// Simple client handler for MCP
+struct ClientHandler;
+
+impl Service<RoleClient> for ClientHandler {
+    async fn handle_request(
+        &self,
+        _request: rmcp::model::ServerRequest,
+        _context: rmcp::service::RequestContext<RoleClient>,
+    ) -> Result<rmcp::model::ClientResult, rmcp::ErrorData> {
+        Ok(rmcp::model::ClientResult::empty(()))
+    }
+
+    async fn handle_notification(
+        &self,
+        _notification: rmcp::model::ServerNotification,
+        _context: rmcp::service::NotificationContext<RoleClient>,
+    ) -> Result<(), rmcp::ErrorData> {
+        Ok(())
+    }
+
+    fn get_info(&self) -> rmcp::model::ClientInfo {
+        rmcp::model::ClientInfo::default()
+    }
+}
+
 struct ChatApp {
     client: Client,
     args: Args,
     history: Vec<Message>,
     tools: Option<Vec<Tool>>,
     workspace: Option<PathBuf>,
+    mcp_clients: Arc<RwLock<Vec<McpClient>>>,
+}
+
+impl McpClient {
+    async fn connect_local(
+        name: String,
+        command: String,
+        args: Option<Vec<String>>,
+        env: Option<HashMap<String, String>>,
+    ) -> Result<Self> {
+        let mut cmd = tokio::process::Command::new(&command);
+
+        if let Some(args) = args {
+            cmd.args(args);
+        }
+
+        if let Some(env_vars) = env {
+            for (key, value) in env_vars {
+                cmd.env(key, value);
+            }
+        }
+
+        let transport = TokioChildProcess::new(cmd)?;
+        let service = ClientHandler;
+        let running_service = serve_client(service, transport).await?;
+        let peer = running_service.peer().clone();
+
+        let tools_result = peer.list_tools(None).await?;
+        let tools = tools_result.tools;
+
+        Ok(Self {
+            name,
+            peer,
+            tools,
+            service: running_service,
+        })
+    }
+
+    async fn connect_remote(name: String, url: String) -> Result<Self> {
+        // Create HTTP transport for remote MCP server
+        let transport = StreamableHttpClientTransport::from_uri(url);
+
+        let service = ClientHandler;
+        let running_service = serve_client(service, transport).await?;
+        let peer = running_service.peer().clone();
+
+        let tools_result = peer.list_tools(None).await?;
+        let tools = tools_result.tools;
+
+        Ok(Self {
+            name,
+            peer,
+            tools,
+            service: running_service,
+        })
+    }
+
+    fn get_tools(&self) -> Vec<Tool> {
+        self.tools
+            .iter()
+            .map(|tool| Tool {
+                tool_type: "function".to_string(),
+                function: ToolFunction {
+                    name: format!("mcp_{}_{}", self.name, tool.name),
+                    description: tool.description.clone().unwrap_or_default().to_string(),
+                    parameters: serde_json::Value::Object(tool.input_schema.as_ref().clone()),
+                },
+            })
+            .collect()
+    }
 }
 
 impl ChatApp {
@@ -143,7 +274,74 @@ impl ChatApp {
             history: Vec::new(),
             tools,
             workspace,
+            mcp_clients: Arc::new(RwLock::new(Vec::new())),
         }
+    }
+
+    async fn initialize_mcp(&mut self) -> Result<()> {
+        if let Some(mcp_path) = &self.args.mcp {
+            let config_content = std::fs::read_to_string(mcp_path)?;
+            let config: McpConfig = serde_json::from_str(&config_content)?;
+
+            let mut mcp_clients = self.mcp_clients.write().await;
+            let mut all_tools = self.tools.take().unwrap_or_default();
+
+            for (server_name, server_config) in &config.mcp_servers {
+                let enabled = server_config.enabled.unwrap_or(true);
+                if !enabled {
+                    continue;
+                }
+
+                let server_type = server_config.server_type.as_deref().unwrap_or("local");
+
+                println!("{} MCP server: {}", "Connecting to".cyan(), server_name);
+
+                let mcp_client = match server_type {
+                    "remote" => {
+                        let url = server_config.url.as_ref().ok_or_else(|| {
+                            anyhow!("Remote MCP server {} missing URL", server_name)
+                        })?;
+                        McpClient::connect_remote(server_name.clone(), url.clone()).await
+                    }
+                    _ => {
+                        let command = server_config.command.as_ref().ok_or_else(|| {
+                            anyhow!("Local MCP server {} missing command", server_name)
+                        })?;
+                        McpClient::connect_local(
+                            server_name.clone(),
+                            command.clone(),
+                            server_config.args.clone(),
+                            server_config.env.clone(),
+                        )
+                        .await
+                    }
+                };
+
+                match mcp_client {
+                    Ok(client) => {
+                        println!(
+                            "{} Connected to {} ({} tools)",
+                            "✓".green(),
+                            server_name,
+                            client.tools.len()
+                        );
+                        all_tools.extend(client.get_tools());
+                        mcp_clients.push(client);
+                    }
+                    Err(e) => {
+                        eprintln!("{} Failed to connect to {}: {}", "✗".red(), server_name, e);
+                    }
+                }
+            }
+
+            self.tools = if all_tools.is_empty() {
+                None
+            } else {
+                Some(all_tools)
+            };
+        }
+
+        Ok(())
     }
 
     fn build_tools() -> Vec<Tool> {
@@ -435,8 +633,74 @@ impl ChatApp {
 
                 Ok(result)
             }
-            _ => Err(anyhow!("Unknown tool: {}", name)),
+            _ => {
+                // Check if it's an MCP tool
+                if name.starts_with("mcp_") {
+                    self.execute_mcp_tool(name, arguments).await
+                } else {
+                    Err(anyhow!("Unknown tool: {}", name))
+                }
+            }
         }
+    }
+
+    async fn execute_mcp_tool(&self, full_name: &str, arguments: &str) -> Result<String> {
+        // Parse MCP tool name: mcp_{server}_{tool}
+        let parts: Vec<&str> = full_name.splitn(3, '_').collect();
+        if parts.len() < 3 {
+            bail!("Invalid MCP tool name format: {}", full_name);
+        }
+
+        let server_name = parts[1];
+        let tool_name = parts[2];
+
+        let mcp_clients = self.mcp_clients.read().await;
+        let mcp_client = mcp_clients
+            .iter()
+            .find(|c| c.name == server_name)
+            .ok_or_else(|| anyhow!("MCP server '{}' not found", server_name))?;
+
+        let args: serde_json::Value = serde_json::from_str(arguments)
+            .map_err(|e| anyhow!("Invalid tool arguments: {}", e))?;
+
+        use rmcp::model::CallToolRequestParams;
+
+        let arguments = args.as_object().cloned();
+
+        let params = CallToolRequestParams {
+            name: tool_name.to_string().into(),
+            arguments,
+            meta: None,
+            task: None,
+        };
+
+        let result = mcp_client
+            .peer
+            .call_tool(params)
+            .await
+            .map_err(|e| anyhow!("MCP tool execution failed: {}", e))?;
+
+        let content_str = result
+            .content
+            .into_iter()
+            .map(|c| {
+                use rmcp::model::RawContent;
+                match c.raw {
+                    RawContent::Text(text) => text.text,
+                    RawContent::Image(img) => format!("[Image: {}]", img.mime_type),
+                    RawContent::Resource(res) => format!("[Resource: {:?}]", res.resource),
+                    RawContent::Audio(audio) => format!("[Audio: {}]", audio.mime_type),
+                    RawContent::ResourceLink(link) => format!("[Resource Link: {:?}]", link),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        Ok(if content_str.is_empty() {
+            "No result".to_string()
+        } else {
+            content_str
+        })
     }
 
     fn build_headers(&self) -> reqwest::header::HeaderMap {
@@ -669,6 +933,25 @@ impl ChatApp {
             println!("  {} {}", "File tools:".dimmed(), "enabled".green());
         }
 
+        if let Some(ref mcp_path) = self.args.mcp {
+            println!(
+                "  {} {}",
+                "MCP config:".dimmed(),
+                mcp_path.display().to_string().dimmed()
+            );
+            println!("  {} {}", "MCP tools:".dimmed(), "enabled".green());
+
+            // Access mcp_clients to show connected servers
+            let clients = self.mcp_clients.read().await;
+            if !clients.is_empty() {
+                println!(
+                    "  {} {} MCP server(s) connected",
+                    "•".dimmed(),
+                    clients.len()
+                );
+            }
+        }
+
         println!();
         println!("{}", "Type your message and press Enter to chat.".dimmed());
         println!(
@@ -719,5 +1002,11 @@ impl ChatApp {
 async fn main() -> Result<()> {
     let args = Args::parse();
     let mut app = ChatApp::new(args);
+
+    // Initialize MCP servers if configured
+    if let Err(e) = app.initialize_mcp().await {
+        eprintln!("{} Failed to initialize MCP: {}", "Warning:".yellow(), e);
+    }
+
     app.run().await
 }
