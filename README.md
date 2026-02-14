@@ -126,12 +126,11 @@ Connect to Model Context Protocol servers for extended capabilities:
       "url": "https://mcp.example.com/mcp?key=sk_5af",
       "enabled": true
     },
-    "filesystem": {
-      "type": "local",
-      "command": "mcp-server-filesystem",
-      "args": ["--root", "/home/user/docs"],
+    "context7": {
+      "command": "bunx",
+      "args": ["-y", "@upstash/context7-mcp", "--api-key", "ctx7sk-..."],
       "enabled": true
-    }
+    },
   }
 }
 ```
