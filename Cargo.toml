@@ -18,3 +18,4 @@ url = "2"
 serde_yaml = "0.9"
 rmcp = { version = "0.15", features = ["client", "transport-child-process", "transport-streamable-http-client", "transport-streamable-http-client-reqwest", "reqwest"] }
 openssl = { version = "0.10", features = ["vendored"] }
+chrono = "0.4.43"

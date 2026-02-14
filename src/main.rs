@@ -762,7 +762,7 @@ impl ChatApp {
             // Build request with history
             let mut messages = vec![Message {
                 role: "system".to_string(),
-                content: Some(self.args.system.clone()),
+                content: Some(self.args.system.clone() + "\n Current time: " + &chrono::Local::now().to_rfc3339()),
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,
