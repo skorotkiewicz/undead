@@ -52,6 +52,40 @@ This connects to `http://localhost:8080/v1` by default.
 | `--system` | `-s` | `You are a helpful assistant.` | System prompt |
 | `--temperature` | (none) | `0.7` | Response randomness (0.0-2.0) |
 | `--max-tokens` | `-t` | `2048` | Maximum tokens in response |
+| `--workspace` | `-w` | (none) | Workspace directory for file operations |
+
+## Workspace Feature
+
+When you specify a `--workspace` directory, the LLM gains access to file operation tools. This allows the assistant to read, write, create, and delete files and directories within the specified workspace.
+
+### Available Tools
+
+When workspace is enabled, the LLM can use these tools:
+
+- **read_file** - Read the contents of a file
+- **write_file** - Write content to a file (creates or overwrites)
+- **create_directory** - Create a new directory (with parent directories if needed)
+- **delete_file** - Delete a file
+- **delete_directory** - Delete an empty directory
+- **list_directory** - List contents of a directory
+
+### Security
+
+All file operations are restricted to the workspace directory. The application validates paths to prevent directory traversal attacks, ensuring the LLM cannot access files outside the specified workspace.
+
+### Example Usage
+
+```bash
+# Enable workspace for a project directory
+./undead --workspace ./src
+
+# The LLM can now read and modify files in ./src
+# Example conversation:
+# You: "List the files in the current directory"
+# Assistant: [Uses list_directory tool]
+# You: "Create a new file called test.txt with 'Hello World'"
+# Assistant: [Uses write_file tool]
+```
 
 ## Interactive Commands
 
@@ -106,6 +140,16 @@ python server.py --extensions openai
 
 ```bash
 ./undead --system "You are a Rust programming expert. Provide concise, accurate answers."
+```
+
+### With Workspace for File Operations
+
+```bash
+# Enable file operations in a specific directory
+./undead --workspace ./my-project
+
+# Combine with other options
+./undead --workspace ./src --endpoint http://localhost:11434/v1 --model llama2
 ```
 
 ## Configuration Examples
