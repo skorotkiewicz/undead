@@ -263,36 +263,55 @@ impl ChatApp {
             .as_ref()
             .ok_or_else(|| anyhow!("Workspace not configured"))?;
 
-        let full_path = workspace.join(relative_path);
-
-        // Canonicalize both paths to prevent directory traversal
+        // Canonicalize workspace to get absolute path
         let canonical_workspace = workspace
             .canonicalize()
-            .unwrap_or_else(|_| workspace.clone());
+            .map_err(|e| anyhow!("Workspace directory does not exist: {}", e))?;
+
+        let full_path = workspace.join(relative_path);
 
         // For paths that don't exist yet, we need to check the parent
-        let canonical_path = if full_path.exists() {
-            full_path
+        if full_path.exists() {
+            // Path exists - canonicalize and verify it's within workspace
+            let canonical_path = full_path
                 .canonicalize()
-                .map_err(|e| anyhow!("Failed to resolve path: {}", e))?
+                .map_err(|e| anyhow!("Failed to resolve path: {}", e))?;
+
+            if !canonical_path.starts_with(&canonical_workspace) {
+                bail!("Path is outside workspace");
+            }
         } else {
-            // Check parent directory exists and is within workspace
-            let parent = full_path.parent().ok_or_else(|| anyhow!("Invalid path"))?;
+            // Path doesn't exist - check parent directory
+            let mut current = full_path.parent();
+            let mut found_valid_parent = false;
 
-            if parent.exists() {
-                let canonical_parent = parent
-                    .canonicalize()
-                    .map_err(|e| anyhow!("Failed to resolve parent path: {}", e))?;
+            // Walk up the tree to find an existing parent
+            while let Some(parent) = current {
+                if parent.exists() {
+                    let canonical_parent = parent
+                        .canonicalize()
+                        .map_err(|e| anyhow!("Failed to resolve parent path: {}", e))?;
 
-                if !canonical_parent.starts_with(&canonical_workspace) {
+                    if !canonical_parent.starts_with(&canonical_workspace) {
+                        bail!("Path is outside workspace");
+                    }
+                    found_valid_parent = true;
+                    break;
+                }
+                current = parent.parent();
+            }
+
+            // If no parent exists, check if the path itself would be within workspace
+            if !found_valid_parent {
+                // This handles the case where we're creating files in the workspace root
+                // or creating nested directories that don't exist yet
+                let path_str = full_path.to_string_lossy();
+                let workspace_str = canonical_workspace.to_string_lossy();
+
+                if !path_str.starts_with(&*workspace_str) {
                     bail!("Path is outside workspace");
                 }
             }
-            full_path.clone()
-        };
-
-        if !canonical_path.starts_with(&canonical_workspace) {
-            bail!("Path is outside workspace");
         }
 
         Ok(full_path)
