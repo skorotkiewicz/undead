@@ -6,6 +6,18 @@ A minimal CLI chat client for OpenAI-compatible APIs with workspace and MCP supp
 
 ## Installation
 
+### Arch Linux (AUR)
+
+You can install `undead` from the AUR using your favorite helper:
+
+```bash
+yay -S undead
+# or
+paru -S undead
+```
+
+### From Source
+
 ```bash
 cargo build --release
 ```
