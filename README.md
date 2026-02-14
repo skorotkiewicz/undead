@@ -2,6 +2,11 @@
 
 A minimal CLI chat client for OpenAI-compatible APIs with workspace and MCP support.
 
+[![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
+[![Build Release](https://github.com/skorotkiewicz/undead/actions/workflows/build.yml/badge.svg)](https://github.com/skorotkiewicz/undead/actions/workflows/build.yml)
+
 ![intro.png](docs/intro.png)
 
 ## Installation
