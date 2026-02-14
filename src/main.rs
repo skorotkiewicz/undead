@@ -62,6 +62,10 @@ struct Args {
     /// MCP configuration file path (enables MCP tools)
     #[arg(short = 'c', long, value_name = "PATH", env = "UNDEAD_MCP")]
     mcp: Option<PathBuf>,
+
+    /// Version
+    #[arg(short = 'V', long)]
+    version: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -1011,6 +1015,10 @@ impl ChatApp {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    if args.version {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let mut app = ChatApp::new(args);
 
     // Initialize MCP servers if configured
