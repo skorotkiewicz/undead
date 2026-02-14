@@ -40,10 +40,10 @@ cargo build --release
 | `-m, --model` | `local-model` | `UNDEAD_MODEL` | Model name |
 | `-k, --api-key` | - | `UNDEAD_API_KEY` | API key |
 | `-s, --system` | `You are a helpful assistant.` | `UNDEAD_SYSTEM` | System prompt |
-| `--temperature` | `0.7` | `UNDEAD_TEMPERATURE` | Temperature (0.0-2.0) |
-| `-t, --max-tokens` | `2048` | `UNDEAD_MAX_TOKENS` | Max tokens |
+| `-t, --temperature` | `0.7` | `UNDEAD_TEMPERATURE` | Temperature (0.0-2.0) |
+| `-T, --max-tokens` | `2048` | `UNDEAD_MAX_TOKENS` | Max tokens |
 | `-w, --workspace` | - | `UNDEAD_WORKSPACE` | Workspace directory |
-| `--mcp` | - | `UNDEAD_MCP` | MCP config file |
+| `-c, --mcp` | - | `UNDEAD_MCP` | MCP config file |
 
 ## Workspace
 
