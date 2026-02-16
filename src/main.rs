@@ -1020,13 +1020,30 @@ impl ChatApp {
 
                 if let Some(stdout) = stdout {
                     let reader = BufReader::new(stdout);
+                    let mut recent_lines = std::collections::VecDeque::with_capacity(10);
+
                     for line in reader.lines() {
                         if cancelled_flag.load(std::sync::atomic::Ordering::SeqCst) {
                             cancelled = true;
                             break;
                         }
                         if let Ok(line) = line {
-                            println!(":  {}\r", line.dimmed());
+                            if recent_lines.len() == 10 {
+                                recent_lines.pop_front();
+                            }
+                            recent_lines.push_back(line.clone());
+
+                            // Move cursor up 10 lines
+                            if recent_lines.len() > 1 {
+                                print!("\x1B[{}A", recent_lines.len());
+                            }
+
+                            // Reprint all recent lines
+                            for l in &recent_lines {
+                                print!("\x1B[2K"); // Clear current line
+                                println!(":  {}\r", l.dimmed());
+                            }
+
                             result.push_str(&line);
                             result.push('\n');
                         }
@@ -1042,7 +1059,7 @@ impl ChatApp {
                                 break;
                             }
                             if let Ok(line) = line {
-                                println!("  {} {}\r", "⚠".yellow(), line);
+                                println!("  {} {}\r", "⚠".yellow(), line.dimmed());
                                 result.push_str("stderr: ");
                                 result.push_str(&line);
                                 result.push('\n');
