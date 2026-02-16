@@ -1169,7 +1169,21 @@ impl ChatApp {
         terminal::enable_raw_mode()?;
 
         let mut input = String::new();
+        let mut cursor_pos = 0usize;
         let mut editor_opened = false;
+
+        // Helper to redraw the input line
+        let redraw = |input: &str, cursor_pos: usize| {
+            // Move to beginning of line, clear to end, print prompt and input
+            print!("\r\x1B[K{} ", "You:".cyan().bold());
+            print!("{}", input);
+            // Move cursor to correct position
+            if cursor_pos < input.len() {
+                let move_left = input.len() - cursor_pos;
+                print!("\x1B[{}D", move_left);
+            }
+            io::stdout().flush().ok();
+        };
 
         loop {
             if event::poll(std::time::Duration::from_millis(100))? {
@@ -1185,6 +1199,7 @@ impl ChatApp {
                                     Ok(content) => {
                                         if !content.is_empty() {
                                             input = content;
+                                            cursor_pos = input.len();
                                             editor_opened = true;
                                         }
                                     }
@@ -1195,6 +1210,9 @@ impl ChatApp {
 
                                 // Re-enable raw mode to continue reading
                                 terminal::enable_raw_mode()?;
+                                if editor_opened && !input.is_empty() {
+                                    redraw(&input, cursor_pos);
+                                }
                             }
                             // Ctrl+C: exit
                             (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
@@ -1210,17 +1228,52 @@ impl ChatApp {
                             }
                             // Backspace
                             (_, KeyCode::Backspace) => {
-                                if !input.is_empty() {
-                                    input.pop();
-                                    print!("\x08 \x08");
-                                    io::stdout().flush()?;
+                                if cursor_pos > 0 {
+                                    input.remove(cursor_pos - 1);
+                                    cursor_pos -= 1;
+                                    redraw(&input, cursor_pos);
                                 }
+                            }
+                            // Delete
+                            (_, KeyCode::Delete) => {
+                                if cursor_pos < input.len() {
+                                    input.remove(cursor_pos);
+                                    redraw(&input, cursor_pos);
+                                }
+                            }
+                            // Left arrow
+                            (_, KeyCode::Left) => {
+                                if cursor_pos > 0 {
+                                    cursor_pos -= 1;
+                                    redraw(&input, cursor_pos);
+                                }
+                            }
+                            // Right arrow
+                            (_, KeyCode::Right) => {
+                                if cursor_pos < input.len() {
+                                    cursor_pos += 1;
+                                    redraw(&input, cursor_pos);
+                                }
+                            }
+                            // Home
+                            (_, KeyCode::Home) => {
+                                cursor_pos = 0;
+                                redraw(&input, cursor_pos);
+                            }
+                            // End
+                            (_, KeyCode::End) => {
+                                cursor_pos = input.len();
+                                redraw(&input, cursor_pos);
                             }
                             // Regular character
                             (_, KeyCode::Char(c)) => {
-                                input.push(c);
-                                print!("{}", c);
-                                io::stdout().flush()?;
+                                if cursor_pos == input.len() {
+                                    input.push(c);
+                                } else {
+                                    input.insert(cursor_pos, c);
+                                }
+                                cursor_pos += 1;
+                                redraw(&input, cursor_pos);
                             }
                             _ => {}
                         }
