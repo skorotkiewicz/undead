@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -215,6 +215,56 @@ impl Service<RoleClient> for ClientHandler {
     }
 }
 
+struct AgentContext {
+    files: Vec<(String, String)>, // (filename, content)
+}
+
+impl AgentContext {
+    fn load(workspace: &Path) -> Self {
+        let agent_dir = workspace.join(".agent");
+
+        // Create .agent directory if it doesn't exist
+        if !agent_dir.exists() {
+            let _ = std::fs::create_dir_all(&agent_dir);
+        }
+
+        // Read all *.md files from .agent directory
+        let mut files = Vec::new();
+        let pattern = format!("{}/*.md", agent_dir.display());
+
+        if let Ok(paths) = glob::glob(&pattern) {
+            for entry in paths.filter_map(|e| e.ok()) {
+                if entry.is_file() {
+                    if let Some(filename) = entry.file_name() {
+                        if let Some(name) = filename.to_str() {
+                            if let Ok(content) = std::fs::read_to_string(&entry) {
+                                files.push((name.to_string(), content));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort by filename for consistent ordering
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+
+        Self { files }
+    }
+
+    fn to_system_prompt(&self) -> String {
+        self.files
+            .iter()
+            .map(|(name, content)| format!("# {}\n{}", name, content))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    fn has_content(&self) -> bool {
+        !self.files.is_empty()
+    }
+}
+
 struct ChatApp {
     client: Client,
     args: Args,
@@ -222,6 +272,7 @@ struct ChatApp {
     tools: Option<Vec<Tool>>,
     workspace: Option<PathBuf>,
     mcp_clients: Arc<RwLock<Vec<McpClient>>>,
+    agent_context: Option<AgentContext>,
 }
 
 impl McpClient {
@@ -297,6 +348,7 @@ impl ChatApp {
     fn new(args: Args) -> Self {
         let workspace = args.workspace.clone();
         let tools = workspace.as_ref().map(|_| Self::build_tools());
+        let agent_context = workspace.as_ref().map(|w| AgentContext::load(w));
 
         Self {
             client: Client::new(),
@@ -305,6 +357,7 @@ impl ChatApp {
             tools,
             workspace,
             mcp_clients: Arc::new(RwLock::new(Vec::new())),
+            agent_context,
         }
     }
 
@@ -479,6 +532,77 @@ impl ChatApp {
                             }
                         },
                         "required": ["path"]
+                    }),
+                },
+            },
+            Tool {
+                tool_type: "function".to_string(),
+                function: ToolFunction {
+                    name: "edit_file".to_string(),
+                    description: "Edit a file by replacing a specific string with another string. Use this for precise edits where you know the exact text to replace.".to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Relative path to the file within the workspace"
+                            },
+                            "old_text": {
+                                "type": "string",
+                                "description": "The exact text to find and replace. Must match exactly including whitespace."
+                            },
+                            "new_text": {
+                                "type": "string",
+                                "description": "The text to replace the old_text with"
+                            }
+                        },
+                        "required": ["path", "old_text", "new_text"]
+                    }),
+                },
+            },
+            Tool {
+                tool_type: "function".to_string(),
+                function: ToolFunction {
+                    name: "glob".to_string(),
+                    description: "Find files matching a glob pattern in the workspace".to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "pattern": {
+                                "type": "string",
+                                "description": "Glob pattern to match files (e.g., '**/*.rs', 'src/**/*.ts', '*.json')"
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": "Relative path to search within (optional, defaults to workspace root)"
+                            }
+                        },
+                        "required": ["pattern"]
+                    }),
+                },
+            },
+            Tool {
+                tool_type: "function".to_string(),
+                function: ToolFunction {
+                    name: "grep".to_string(),
+                    description: "Search for a regex pattern in files within the workspace".to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "pattern": {
+                                "type": "string",
+                                "description": "Regex pattern to search for in file contents"
+                            },
+                            "path": {
+                                "type": "string",
+                                "description": "Relative path to search within (optional, defaults to workspace root)"
+                            },
+                            "glob": {
+                                "type": "string",
+                                "description": "Glob pattern to filter files (optional, e.g., '*.rs', '*.ts')"
+                            }
+                        },
+                        "required": ["pattern"]
                     }),
                 },
             },
@@ -663,6 +787,140 @@ impl ChatApp {
 
                 Ok(result)
             }
+            "edit_file" => {
+                let path = args["path"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("Missing path argument"))?;
+                let old_text = args["old_text"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("Missing old_text argument"))?;
+                let new_text = args["new_text"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("Missing new_text argument"))?;
+                let full_path = self.validate_path(path)?;
+
+                let content = tokio::fs::read_to_string(&full_path)
+                    .await
+                    .map_err(|e| anyhow!("Failed to read file {}: {}", path, e))?;
+
+                if !content.contains(old_text) {
+                    return Err(anyhow!(
+                        "Could not find the text to replace in file {}. The old_text must match exactly.",
+                        path
+                    ));
+                }
+
+                let occurrences = content.matches(old_text).count();
+                let new_content = content.replace(old_text, new_text);
+
+                tokio::fs::write(&full_path, &new_content)
+                    .await
+                    .map_err(|e| anyhow!("Failed to write file {}: {}", path, e))?;
+
+                Ok(format!(
+                    "Successfully replaced {} occurrence(s) of old_text with new_text in {}",
+                    occurrences, path
+                ))
+            }
+            "glob" => {
+                let pattern = args["pattern"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("Missing pattern argument"))?;
+                let search_path = args["path"].as_str().unwrap_or(".");
+                let base_path = self.validate_path(search_path)?;
+                let workspace = self
+                    .workspace
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("Workspace not configured"))?;
+
+                let full_pattern = if search_path == "." {
+                    format!("{}{}", workspace.display(), pattern)
+                } else {
+                    format!("{}/{}", base_path.display(), pattern)
+                };
+
+                let matches: Vec<_> = glob::glob(&full_pattern)
+                    .map_err(|e| anyhow!("Invalid glob pattern: {}", e))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+
+                if matches.is_empty() {
+                    Ok(format!("No files found matching pattern: {}", pattern))
+                } else {
+                    let mut result = format!("Files matching '{}':\n", pattern);
+                    for entry in matches {
+                        let relative = entry
+                            .strip_prefix(workspace)
+                            .unwrap_or(&entry)
+                            .display()
+                            .to_string();
+                        result.push_str(&format!("  📄 {}\n", relative));
+                    }
+                    Ok(result)
+                }
+            }
+            "grep" => {
+                let pattern = args["pattern"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("Missing pattern argument"))?;
+                let search_path = args["path"].as_str().unwrap_or(".");
+                let glob_pattern = args["glob"].as_str().unwrap_or("*");
+
+                let base_path = self.validate_path(search_path)?;
+                let workspace = self
+                    .workspace
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("Workspace not configured"))?;
+                let re = regex::Regex::new(pattern)
+                    .map_err(|e| anyhow!("Invalid regex pattern: {}", e))?;
+
+                let full_glob = if search_path == "." {
+                    format!("{}**/{}", workspace.display(), glob_pattern)
+                } else {
+                    format!("{}/**/{}", base_path.display(), glob_pattern)
+                };
+
+                let files: Vec<_> = glob::glob(&full_glob)
+                    .map_err(|e| anyhow!("Invalid glob pattern: {}", e))?
+                    .filter_map(|r| r.ok())
+                    .filter(|p| p.is_file())
+                    .collect();
+
+                let files_len = files.len();
+                if files.is_empty() {
+                    return Ok(format!("No files found matching glob: {}", glob_pattern));
+                }
+
+                let mut results = Vec::new();
+                for file_path in files {
+                    if let Ok(content) = std::fs::read_to_string(&file_path) {
+                        let relative = file_path
+                            .strip_prefix(workspace)
+                            .unwrap_or(&file_path)
+                            .display()
+                            .to_string();
+
+                        for (line_num, line) in content.lines().enumerate() {
+                            if re.is_match(line) {
+                                results.push(format!("{}:{}: {}", relative, line_num + 1, line));
+                            }
+                        }
+                    }
+                }
+
+                if results.is_empty() {
+                    Ok(format!(
+                        "No matches found for pattern '{}' in {} files",
+                        pattern, files_len
+                    ))
+                } else {
+                    Ok(format!(
+                        "Found {} matches:\n{}",
+                        results.len(),
+                        results.join("\n")
+                    ))
+                }
+            }
             _ => {
                 // Check if it's an MCP tool
                 if name.starts_with("mcp_") {
@@ -760,13 +1018,22 @@ impl ChatApp {
 
         loop {
             // Build request with history
+            let mut system_content = self.args.system.clone();
+
+            // Add agent context if available
+            if let Some(ref agent_context) = self.agent_context {
+                if agent_context.has_content() {
+                    system_content.push_str("\n\n---\n# Agent Configuration\n");
+                    system_content.push_str(&agent_context.to_system_prompt());
+                }
+            }
+
+            system_content.push_str("\n\nCurrent time: ");
+            system_content.push_str(&chrono::Local::now().to_rfc3339());
+
             let mut messages = vec![Message {
                 role: "system".to_string(),
-                content: Some(
-                    self.args.system.clone()
-                        + "\n Current time: "
-                        + &chrono::Local::now().to_rfc3339(),
-                ),
+                content: Some(system_content),
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,

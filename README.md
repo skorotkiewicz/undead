@@ -114,12 +114,38 @@ Enable file operations within a directory:
 **Available tools:**
 - `read_file` - Read file contents
 - `write_file` - Write/create files
+- `edit_file` - Edit files with precise string replacement
 - `create_directory` - Create directories
 - `delete_file` - Delete files
 - `delete_directory` - Delete directories
 - `list_directory` - List directory contents
+- `glob` - Find files by pattern
+- `grep` - Search file contents with regex
 
 All operations are sandboxed to the workspace directory.
+
+## Agent Directory
+
+When a workspace is configured, undead automatically reads all `*.md` files from the `.agent/` directory to customize the agent's behavior. If the directory doesn't exist, it will be created.
+
+```bash
+./undead --workspace ./my-project
+# Reads from ./my-project/.agent/*.md or creates the directory
+```
+
+**Example `.agent/` directory:**
+
+```
+my-project/
+├── .agent/
+│   ├── persona.md      # "You are a senior Rust developer"
+│   ├── skills.md       # "Code review, refactoring, documentation"
+│   └── context.md      # "This is a CLI tool for AI chat"
+└── src/
+    └── ...
+```
+
+All `*.md` files are automatically loaded and appended to the system prompt when the workspace is active. Each file becomes a section with the filename as the header.
 
 ## MCP
 
