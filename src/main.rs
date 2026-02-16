@@ -1257,6 +1257,7 @@ impl ChatApp {
             let mut tool_calls: Vec<ToolCall> = Vec::new();
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();
+            let mut first_content = true; // Track if we've received any content yet
 
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk?;
@@ -1278,6 +1279,12 @@ impl ChatApp {
                             if let Some(choice) = stream_response.choices.first() {
                                 // Handle content
                                 if let Some(content) = &choice.delta.content {
+                                    // Clear "thinking..." on first content
+                                    if first_content {
+                                        print!("\r{} ", "Assistant:".green().bold());
+                                        io::stdout().flush()?;
+                                        first_content = false;
+                                    }
                                     print!("{}", content);
                                     io::stdout().flush()?;
                                     full_response.push_str(content);
@@ -1285,6 +1292,13 @@ impl ChatApp {
 
                                 // Handle tool calls
                                 if let Some(delta_tool_calls) = &choice.delta.tool_calls {
+                                    // Clear "thinking..." if tool calls arrive first
+                                    if first_content {
+                                        print!("\r{} ", "Assistant:".green().bold());
+                                        io::stdout().flush()?;
+                                        first_content = false;
+                                    }
+
                                     for delta_tc in delta_tool_calls {
                                         // Find or create tool call
                                         if let Some(id) = &delta_tc.id {
@@ -1334,7 +1348,7 @@ impl ChatApp {
 
             // If there are tool calls, execute them and continue the conversation
             if !tool_calls.is_empty() {
-                println!("{}", "Executing tools...".yellow().bold());
+                // println!("{}", "Executing tools...".yellow().bold());
 
                 // Add assistant message with tool calls to history
                 self.history.push(Message {
@@ -1372,8 +1386,9 @@ impl ChatApp {
                     });
                 }
 
-                println!("{}", "Processing results...".yellow().bold());
+                // println!("{}", "Processing results...".yellow().bold());
                 print!("{} ", "Assistant:".green().bold());
+                print!("{}", "thinking...".dimmed().italic());
                 io::stdout().flush()?;
 
                 // Continue the loop to get the next response
@@ -1482,6 +1497,7 @@ impl ChatApp {
             }
 
             print!("{} ", "Assistant:".green().bold());
+            print!("{}", "thinking...".dimmed().italic());
             io::stdout().flush()?;
 
             if let Err(e) = self.send_message(trimmed).await {
