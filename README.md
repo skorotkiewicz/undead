@@ -181,7 +181,12 @@ Connect to Model Context Protocol servers for extended capabilities:
 - `Ctrl+E` - Open editor for multi-line input
 - `Ctrl+C` - Exit
 
-The `Ctrl+E` command opens your default editor (set via `$EDITOR` or `$VISUAL` environment variable, defaults to `nano`) where you can write multi-line messages. When you save and close the editor, the content is sent to the LLM.
+The `Ctrl+E` command opens your default editor where you can write multi-line messages. When you save and close the editor, the content is sent to the LLM.
+
+**Editor selection priority:**
+1. `$EDITOR` environment variable
+2. `$VISUAL` environment variable
+3. Platform default: `vim` (macOS), `nano` (Linux), `notepad` (Windows)
 
 ## Compatible APIs
 

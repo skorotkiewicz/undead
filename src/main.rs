@@ -275,10 +275,23 @@ fn open_editor() -> Result<String> {
     // Create empty file if it doesn't exist
     std::fs::write(&temp_file, "")?;
 
-    // Get editor from environment or use default
+    // Get editor from environment or use platform-specific default
     let editor = std::env::var("EDITOR")
         .or_else(|_| std::env::var("VISUAL"))
-        .unwrap_or_else(|_| "nano".to_string());
+        .unwrap_or_else(|_| {
+            #[cfg(target_os = "windows")]
+            {
+                "notepad".to_string()
+            }
+            #[cfg(target_os = "macos")]
+            {
+                "vim".to_string()
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            {
+                "nano".to_string()
+            }
+        });
 
     // Open editor
     let status = Command::new(&editor)
@@ -1151,8 +1164,8 @@ impl ChatApp {
                             // Ctrl+C: exit
                             (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                                 terminal::disable_raw_mode()?;
-                                println!();
-                                return Ok(String::new());
+                                println!("\n{}", "Goodbye! 👋".green());
+                                std::process::exit(0);
                             }
                             // Enter: submit input
                             (_, KeyCode::Enter) => {
