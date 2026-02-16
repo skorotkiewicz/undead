@@ -1,6 +1,7 @@
 /src-bak
 /target
 /test-workspace*
+!/test-workspace.sh
 /mcp.json
 /config.yml
 /arch
