@@ -175,6 +175,10 @@ Connect to Model Context Protocol servers for extended capabilities:
 
 - `exit`, `quit`, `q` - Exit
 - `clear` - Clear history
+- `Ctrl+E` - Open editor for multi-line input
+- `Ctrl+C` - Exit
+
+The `Ctrl+E` command opens your default editor (set via `$EDITOR` or `$VISUAL` environment variable, defaults to `nano`) where you can write multi-line messages. When you save and close the editor, the content is sent to the LLM.
 
 ## Compatible APIs
 

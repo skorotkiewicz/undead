@@ -1,7 +1,8 @@
 use anyhow::{Result, anyhow, bail};
 use clap::Parser;
 use colored::Colorize;
-use dialoguer::{Input, theme::ColorfulTheme};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::terminal;
 use futures_util::StreamExt;
 use reqwest::Client;
 use rmcp::model::Tool as McpTool;
@@ -14,6 +15,7 @@ use std::collections::HashMap;
 use std::env;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -263,6 +265,38 @@ impl AgentContext {
     fn has_content(&self) -> bool {
         !self.files.is_empty()
     }
+}
+
+fn open_editor() -> Result<String> {
+    // Create a temporary file
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join("undead_input.md");
+
+    // Create empty file if it doesn't exist
+    std::fs::write(&temp_file, "")?;
+
+    // Get editor from environment or use default
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "nano".to_string());
+
+    // Open editor
+    let status = Command::new(&editor)
+        .arg(&temp_file)
+        .status()
+        .map_err(|e| anyhow!("Failed to open editor '{}': {}", editor, e))?;
+
+    if !status.success() {
+        return Err(anyhow!("Editor exited with non-zero status"));
+    }
+
+    // Read content from temp file
+    let content = std::fs::read_to_string(&temp_file)?;
+
+    // Clean up - remove temp file
+    let _ = std::fs::remove_file(&temp_file);
+
+    Ok(content.trim().to_string())
 }
 
 struct ChatApp {
@@ -1006,6 +1040,79 @@ impl ChatApp {
         headers
     }
 
+    fn read_input_with_ctrl_e(&self) -> Result<String> {
+        // Enable raw mode to detect key presses
+        terminal::enable_raw_mode()?;
+
+        let mut input = String::new();
+        let mut editor_opened = false;
+
+        loop {
+            if event::poll(std::time::Duration::from_millis(100))? {
+                match event::read()? {
+                    Event::Key(key) => {
+                        match (key.modifiers, key.code) {
+                            // Ctrl+E: open editor
+                            (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
+                                terminal::disable_raw_mode()?;
+                                println!("\n{}", "Opening editor...".yellow());
+
+                                match open_editor() {
+                                    Ok(content) => {
+                                        if !content.is_empty() {
+                                            input = content;
+                                            editor_opened = true;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("{} {}", "Error:".red(), e);
+                                    }
+                                }
+
+                                // Re-enable raw mode to continue reading
+                                terminal::enable_raw_mode()?;
+                            }
+                            // Ctrl+C: exit
+                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                                terminal::disable_raw_mode()?;
+                                println!();
+                                return Ok(String::new());
+                            }
+                            // Enter: submit input
+                            (_, KeyCode::Enter) => {
+                                terminal::disable_raw_mode()?;
+                                println!();
+                                return Ok(input);
+                            }
+                            // Backspace
+                            (_, KeyCode::Backspace) => {
+                                if !input.is_empty() {
+                                    input.pop();
+                                    print!("\x08 \x08");
+                                    io::stdout().flush()?;
+                                }
+                            }
+                            // Regular character
+                            (_, KeyCode::Char(c)) => {
+                                input.push(c);
+                                print!("{}", c);
+                                io::stdout().flush()?;
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // If editor was opened and we have content, return it
+            if editor_opened && !input.is_empty() {
+                terminal::disable_raw_mode()?;
+                return Ok(input);
+            }
+        }
+    }
+
     async fn send_message(&mut self, user_input: &str) -> Result<String> {
         // Add user message to history
         self.history.push(Message {
@@ -1260,12 +1367,18 @@ impl ChatApp {
             "Type 'exit', 'quit', or press Ctrl+C to exit.".dimmed()
         );
         println!("{}", "Type 'clear' to clear conversation history.".dimmed());
+        println!(
+            "{}",
+            "Press Ctrl+E to open editor for multi-line input.".dimmed()
+        );
         println!();
 
         loop {
-            let input: String = Input::with_theme(&ColorfulTheme::default())
-                .with_prompt("You")
-                .interact_text()?;
+            // Check for Ctrl+E before normal input
+            print!("{} ", "You:".cyan().bold());
+            io::stdout().flush()?;
+
+            let input = self.read_input_with_ctrl_e()?;
 
             let trimmed = input.trim();
 
