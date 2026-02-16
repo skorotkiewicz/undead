@@ -640,6 +640,23 @@ impl ChatApp {
                     }),
                 },
             },
+            Tool {
+                tool_type: "function".to_string(),
+                function: ToolFunction {
+                    name: "execute".to_string(),
+                    description: "Execute a shell command in the workspace directory. Use with caution. The command runs in the workspace context.".to_string(),
+                    parameters: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "Shell command to execute (e.g., 'ls -la', 'cat file.txt | grep pattern')"
+                            }
+                        },
+                        "required": ["command"]
+                    }),
+                },
+            },
         ]
     }
 
@@ -952,6 +969,65 @@ impl ChatApp {
                         "Found {} matches:\n{}",
                         results.len(),
                         results.join("\n")
+                    ))
+                }
+            }
+            "execute" => {
+                let command = args["command"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("Missing command argument"))?;
+                let workspace = self
+                    .workspace
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("Workspace not configured"))?;
+
+                // Ask user for confirmation before executing
+                println!(
+                    "\n{} Execute command: {}",
+                    "?".yellow().bold(),
+                    command.cyan()
+                );
+                print!("Run? (y/N): ");
+                io::stdout().flush()?;
+
+                let mut confirmation = String::new();
+                io::stdin().read_line(&mut confirmation)?;
+
+                if confirmation.trim().to_lowercase() != "y" {
+                    return Ok("Command execution cancelled by user".to_string());
+                }
+
+                let output = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(command)
+                    .current_dir(workspace)
+                    .output()
+                    .map_err(|e| anyhow!("Failed to execute command: {}", e))?;
+
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+
+                let mut result = String::new();
+
+                if !stdout.is_empty() {
+                    result.push_str(&format!("{}\n", stdout));
+                }
+
+                if !stderr.is_empty() {
+                    result.push_str(&format!("stderr: {}\n", stderr));
+                }
+
+                if output.status.success() {
+                    if result.is_empty() {
+                        Ok("Command executed successfully (no output)".to_string())
+                    } else {
+                        Ok(result.trim().to_string())
+                    }
+                } else {
+                    Ok(format!(
+                        "Command exited with code {:?}\n{}",
+                        output.status.code(),
+                        result.trim()
                     ))
                 }
             }

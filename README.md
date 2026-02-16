@@ -121,8 +121,11 @@ Enable file operations within a directory:
 - `list_directory` - List directory contents
 - `glob` - Find files by pattern
 - `grep` - Search file contents with regex
+- `execute` - Execute shell commands in the workspace
 
 All operations are sandboxed to the workspace directory.
+
+**Note:** The `execute` tool requires user confirmation before running any command. You will be prompted with `Run? (y/N):` and must type `y` to proceed.
 
 ## Agent Directory
 
