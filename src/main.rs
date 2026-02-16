@@ -691,52 +691,6 @@ impl ChatApp {
             Tool {
                 tool_type: "function".to_string(),
                 function: ToolFunction {
-                    name: "glob".to_string(),
-                    description: "Find files matching a glob pattern in the workspace".to_string(),
-                    parameters: serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "pattern": {
-                                "type": "string",
-                                "description": "Glob pattern to match files (e.g., '**/*.rs', 'src/**/*.ts', '*.json')"
-                            },
-                            "path": {
-                                "type": "string",
-                                "description": "Relative path to search within (optional, defaults to workspace root)"
-                            }
-                        },
-                        "required": ["pattern"]
-                    }),
-                },
-            },
-            Tool {
-                tool_type: "function".to_string(),
-                function: ToolFunction {
-                    name: "grep".to_string(),
-                    description: "Search for a regex pattern in files within the workspace".to_string(),
-                    parameters: serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "pattern": {
-                                "type": "string",
-                                "description": "Regex pattern to search for in file contents"
-                            },
-                            "path": {
-                                "type": "string",
-                                "description": "Relative path to search within (optional, defaults to workspace root)"
-                            },
-                            "glob": {
-                                "type": "string",
-                                "description": "Glob pattern to filter files (optional, e.g., '*.rs', '*.ts')"
-                            }
-                        },
-                        "required": ["pattern"]
-                    }),
-                },
-            },
-            Tool {
-                tool_type: "function".to_string(),
-                function: ToolFunction {
                     name: "execute".to_string(),
                     description: "Execute a shell command in the workspace directory. Use with caution. The command runs in the workspace context.".to_string(),
                     parameters: serde_json::json!({
@@ -967,105 +921,6 @@ impl ChatApp {
                     occurrences, path
                 ))
             }
-            "glob" => {
-                let pattern = args["pattern"]
-                    .as_str()
-                    .ok_or_else(|| anyhow!("Missing pattern argument"))?;
-                let search_path = args["path"].as_str().unwrap_or(".");
-                let base_path = self.validate_path(search_path)?;
-                let workspace = self
-                    .workspace
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("Workspace not configured"))?;
-
-                let full_pattern = if search_path == "." {
-                    format!("{}{}", workspace.display(), pattern)
-                } else {
-                    format!("{}/{}", base_path.display(), pattern)
-                };
-
-                let matches: Vec<_> = glob::glob(&full_pattern)
-                    .map_err(|e| anyhow!("Invalid glob pattern: {}", e))?
-                    .filter_map(|r| r.ok())
-                    .collect();
-
-                if matches.is_empty() {
-                    Ok(format!("No files found matching pattern: {}", pattern))
-                } else {
-                    let mut result = format!("Files matching '{}':\n", pattern);
-                    for entry in matches {
-                        let relative = entry
-                            .strip_prefix(workspace)
-                            .unwrap_or(&entry)
-                            .display()
-                            .to_string();
-                        result.push_str(&format!("  📄 {}\n", relative));
-                    }
-                    Ok(result)
-                }
-            }
-            "grep" => {
-                let pattern = args["pattern"]
-                    .as_str()
-                    .ok_or_else(|| anyhow!("Missing pattern argument"))?;
-                let search_path = args["path"].as_str().unwrap_or(".");
-                let glob_pattern = args["glob"].as_str().unwrap_or("*");
-
-                let base_path = self.validate_path(search_path)?;
-                let workspace = self
-                    .workspace
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("Workspace not configured"))?;
-                let re = regex::Regex::new(pattern)
-                    .map_err(|e| anyhow!("Invalid regex pattern: {}", e))?;
-
-                let full_glob = if search_path == "." {
-                    format!("{}**/{}", workspace.display(), glob_pattern)
-                } else {
-                    format!("{}/**/{}", base_path.display(), glob_pattern)
-                };
-
-                let files: Vec<_> = glob::glob(&full_glob)
-                    .map_err(|e| anyhow!("Invalid glob pattern: {}", e))?
-                    .filter_map(|r| r.ok())
-                    .filter(|p| p.is_file())
-                    .collect();
-
-                let files_len = files.len();
-                if files.is_empty() {
-                    return Ok(format!("No files found matching glob: {}", glob_pattern));
-                }
-
-                let mut results = Vec::new();
-                for file_path in files {
-                    if let Ok(content) = std::fs::read_to_string(&file_path) {
-                        let relative = file_path
-                            .strip_prefix(workspace)
-                            .unwrap_or(&file_path)
-                            .display()
-                            .to_string();
-
-                        for (line_num, line) in content.lines().enumerate() {
-                            if re.is_match(line) {
-                                results.push(format!("{}:{}: {}", relative, line_num + 1, line));
-                            }
-                        }
-                    }
-                }
-
-                if results.is_empty() {
-                    Ok(format!(
-                        "No matches found for pattern '{}' in {} files",
-                        pattern, files_len
-                    ))
-                } else {
-                    Ok(format!(
-                        "Found {} matches:\n{}",
-                        results.len(),
-                        results.join("\n")
-                    ))
-                }
-            }
             "execute" => {
                 let command = args["command"]
                     .as_str()
@@ -1113,42 +968,44 @@ impl ChatApp {
                 let stdout = child.stdout.take();
                 let stderr = child.stderr.take();
 
-                // Enable raw mode to detect Ctrl+C during execution
-                let _ = terminal::enable_raw_mode();
+                // Use Arc for thread-safe cancellation flag
+                let cancelled_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let cancelled_flag_clone = cancelled_flag.clone();
+                let pid_clone = pid;
 
-                if let Some(stdout) = stdout {
-                    let reader = BufReader::new(stdout);
-                    for line in reader.lines() {
-                        // Check for 'c' key to cancel
-                        if event::poll(std::time::Duration::from_millis(0)).unwrap_or(false) {
+                // Spawn thread to listen for 'c' key
+                let key_thread = std::thread::spawn(move || {
+                    let _ = terminal::enable_raw_mode();
+                    loop {
+                        if cancelled_flag_clone.load(std::sync::atomic::Ordering::SeqCst) {
+                            break;
+                        }
+                        if event::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
                             if let Ok(Event::Key(key)) = event::read() {
                                 if key.code == KeyCode::Char('c') {
                                     let _ = terminal::disable_raw_mode();
-                                    println!("\n{}", "Cancel? (y/N): ".yellow());
+                                    print!("\n{}", "Cancel? (y/N): ".yellow());
                                     io::stdout().flush().ok();
 
-                                    // Restore terminal for input
-                                    let _ = terminal::disable_raw_mode();
                                     let mut cancel_input = String::new();
                                     io::stdin().read_line(&mut cancel_input).ok();
 
                                     if cancel_input.trim().to_lowercase() == "y" {
                                         println!("{}", "Cancelling...".yellow());
-
                                         // Kill the process
                                         #[cfg(unix)]
                                         {
                                             let _ = std::process::Command::new("kill")
                                                 .arg("-TERM")
-                                                .arg(pid.to_string())
+                                                .arg(pid_clone.to_string())
                                                 .spawn();
                                         }
                                         #[cfg(windows)]
                                         {
-                                            let _ = child.kill();
+                                            // let _ = child.kill();
                                         }
-
-                                        cancelled = true;
+                                        cancelled_flag_clone
+                                            .store(true, std::sync::atomic::Ordering::SeqCst);
                                         break;
                                     } else {
                                         println!("{}", "Continuing...".green());
@@ -1157,28 +1014,46 @@ impl ChatApp {
                                 }
                             }
                         }
-
-                        if let Ok(line) = line {
-                            println!("{}", line);
-                            result.push_str(&line);
-                            result.push('\n');
-                        }
                     }
-                }
+                    let _ = terminal::disable_raw_mode();
+                });
 
-                if let Some(stderr) = stderr {
-                    let reader = BufReader::new(stderr);
+                if let Some(stdout) = stdout {
+                    let reader = BufReader::new(stdout);
                     for line in reader.lines() {
+                        if cancelled_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                            cancelled = true;
+                            break;
+                        }
                         if let Ok(line) = line {
-                            eprintln!("{}", line.red());
-                            result.push_str("stderr: ");
+                            println!(":  {}\r", line.dimmed());
                             result.push_str(&line);
                             result.push('\n');
                         }
                     }
                 }
 
-                let _ = terminal::disable_raw_mode();
+                if !cancelled {
+                    if let Some(stderr) = stderr {
+                        let reader = BufReader::new(stderr);
+                        for line in reader.lines() {
+                            if cancelled_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                                cancelled = true;
+                                break;
+                            }
+                            if let Ok(line) = line {
+                                println!("  {} {}\r", "⚠".yellow(), line);
+                                result.push_str("stderr: ");
+                                result.push_str(&line);
+                                result.push('\n');
+                            }
+                        }
+                    }
+                }
+
+                // Signal key thread to stop and wait for it
+                cancelled_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                let _ = key_thread.join();
 
                 let status = child.wait().ok();
 

@@ -119,8 +119,6 @@ Enable file operations within a directory:
 - `delete_file` - Delete files
 - `delete_directory` - Delete directories
 - `list_directory` - List directory contents
-- `glob` - Find files by pattern
-- `grep` - Search file contents with regex
 - `execute` - Execute shell commands in the workspace
 
 All operations are sandboxed to the workspace directory.
