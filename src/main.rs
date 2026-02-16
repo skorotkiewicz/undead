@@ -1210,9 +1210,6 @@ impl ChatApp {
 
                                 // Re-enable raw mode to continue reading
                                 terminal::enable_raw_mode()?;
-                                if editor_opened && !input.is_empty() {
-                                    redraw(&input, cursor_pos);
-                                }
                             }
                             // Ctrl+C: exit
                             (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
