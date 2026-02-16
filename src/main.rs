@@ -279,17 +279,10 @@ fn open_editor() -> Result<String> {
     let editor = std::env::var("EDITOR")
         .or_else(|_| std::env::var("VISUAL"))
         .unwrap_or_else(|_| {
-            #[cfg(target_os = "windows")]
-            {
+            if cfg!(windows) {
                 "notepad".to_string()
-            }
-            #[cfg(target_os = "macos")]
-            {
-                "vim".to_string()
-            }
-            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-            {
-                "nano".to_string()
+            } else {
+                "vi".to_string()
             }
         });
 
