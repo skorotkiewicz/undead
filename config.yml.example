@@ -35,7 +35,9 @@ presets:
 
    "free":
       UNDEAD_ENDPOINT: "https://openrouter.ai/api/v1"
-      UNDEAD_MODEL: "stepfun/step-3.5-flash:free"
+      UNDEAD_MODEL: "openrouter/free"
+      # UNDEAD_MODEL: "stepfun/step-3.5-flash:free"
+      # UNDEAD_MODEL: "upstage/solar-pro-3:free"
       UNDEAD_API_KEY: ""
       UNDEAD_SYSTEM: ""
       UNDEAD_TEMPERATURE: ""
