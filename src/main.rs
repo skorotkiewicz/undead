@@ -305,6 +305,88 @@ fn open_editor() -> Result<String> {
     Ok(content.trim().to_string())
 }
 
+fn get_history_path(workspace: &Path) -> PathBuf {
+    workspace.join(".agent").join("HISTORY.log")
+}
+
+fn load_history(workspace: &Path) -> Vec<Message> {
+    let history_path = get_history_path(workspace);
+    if !history_path.exists() {
+        return Vec::new();
+    }
+
+    if let Ok(content) = std::fs::read_to_string(&history_path) {
+        // Parse history log format: "--- ROLE ---\ncontent\n--- END ---"
+        let mut messages = Vec::new();
+        let parts: Vec<&str> = content.split("--- END ---").collect();
+
+        for part in parts {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+
+            if part.starts_with("--- USER ---") {
+                let content = part.strip_prefix("--- USER ---").unwrap_or("").trim();
+                if !content.is_empty() {
+                    messages.push(Message {
+                        role: "user".to_string(),
+                        content: Some(content.to_string()),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    });
+                }
+            } else if part.starts_with("--- ASSISTANT ---") {
+                let content = part.strip_prefix("--- ASSISTANT ---").unwrap_or("").trim();
+                if !content.is_empty() {
+                    messages.push(Message {
+                        role: "assistant".to_string(),
+                        content: Some(content.to_string()),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        name: None,
+                    });
+                }
+            }
+        }
+
+        messages
+    } else {
+        Vec::new()
+    }
+}
+
+fn save_history(workspace: &Path, messages: &[Message]) {
+    let history_path = get_history_path(workspace);
+
+    // Create .agent directory if it doesn't exist
+    if let Some(parent) = history_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let mut content = String::new();
+    for msg in messages {
+        match msg.role.as_str() {
+            "user" => {
+                content.push_str(&format!(
+                    "--- USER ---\n{}\n--- END ---\n\n",
+                    msg.content.as_deref().unwrap_or("")
+                ));
+            }
+            "assistant" => {
+                content.push_str(&format!(
+                    "--- ASSISTANT ---\n{}\n--- END ---\n\n",
+                    msg.content.as_deref().unwrap_or("")
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    let _ = std::fs::write(&history_path, content);
+}
+
 struct ChatApp {
     client: Client,
     args: Args,
@@ -390,10 +472,16 @@ impl ChatApp {
         let tools = workspace.as_ref().map(|_| Self::build_tools());
         let agent_context = workspace.as_ref().map(|w| AgentContext::load(w));
 
+        // Load history from workspace/.agent/HISTORY.log
+        let history = workspace
+            .as_ref()
+            .map(|w| load_history(w))
+            .unwrap_or_default();
+
         Self {
             client: Client::new(),
             args,
-            history: Vec::new(),
+            history,
             tools,
             workspace,
             mcp_clients: Arc::new(RwLock::new(Vec::new())),
@@ -1003,38 +1091,117 @@ impl ChatApp {
                     return Ok("Command execution cancelled by user".to_string());
                 }
 
-                let output = std::process::Command::new("sh")
+                println!("{}", "Press 'c' to cancel while executing...".dimmed());
+
+                // Spawn the command with streaming output
+                let mut child = std::process::Command::new("sh")
                     .arg("-c")
                     .arg(command)
                     .current_dir(workspace)
-                    .output()
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
                     .map_err(|e| anyhow!("Failed to execute command: {}", e))?;
 
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-
+                let pid = child.id();
                 let mut result = String::new();
+                let mut cancelled = false;
 
-                if !stdout.is_empty() {
-                    result.push_str(&format!("{}\n", stdout));
+                // Read stdout and stderr with streaming
+                use std::io::{BufRead, BufReader};
+
+                let stdout = child.stdout.take();
+                let stderr = child.stderr.take();
+
+                // Enable raw mode to detect Ctrl+C during execution
+                let _ = terminal::enable_raw_mode();
+
+                if let Some(stdout) = stdout {
+                    let reader = BufReader::new(stdout);
+                    for line in reader.lines() {
+                        // Check for 'c' key to cancel
+                        if event::poll(std::time::Duration::from_millis(0)).unwrap_or(false) {
+                            if let Ok(Event::Key(key)) = event::read() {
+                                if key.code == KeyCode::Char('c') {
+                                    let _ = terminal::disable_raw_mode();
+                                    println!("\n{}", "Cancel? (y/N): ".yellow());
+                                    io::stdout().flush().ok();
+
+                                    // Restore terminal for input
+                                    let _ = terminal::disable_raw_mode();
+                                    let mut cancel_input = String::new();
+                                    io::stdin().read_line(&mut cancel_input).ok();
+
+                                    if cancel_input.trim().to_lowercase() == "y" {
+                                        println!("{}", "Cancelling...".yellow());
+
+                                        // Kill the process
+                                        #[cfg(unix)]
+                                        {
+                                            let _ = std::process::Command::new("kill")
+                                                .arg("-TERM")
+                                                .arg(pid.to_string())
+                                                .spawn();
+                                        }
+                                        #[cfg(windows)]
+                                        {
+                                            let _ = child.kill();
+                                        }
+
+                                        cancelled = true;
+                                        break;
+                                    } else {
+                                        println!("{}", "Continuing...".green());
+                                        let _ = terminal::enable_raw_mode();
+                                    }
+                                }
+                            }
+                        }
+
+                        if let Ok(line) = line {
+                            println!("{}", line);
+                            result.push_str(&line);
+                            result.push('\n');
+                        }
+                    }
                 }
 
-                if !stderr.is_empty() {
-                    result.push_str(&format!("stderr: {}\n", stderr));
+                if let Some(stderr) = stderr {
+                    let reader = BufReader::new(stderr);
+                    for line in reader.lines() {
+                        if let Ok(line) = line {
+                            eprintln!("{}", line.red());
+                            result.push_str("stderr: ");
+                            result.push_str(&line);
+                            result.push('\n');
+                        }
+                    }
                 }
 
-                if output.status.success() {
-                    if result.is_empty() {
-                        Ok("Command executed successfully (no output)".to_string())
+                let _ = terminal::disable_raw_mode();
+
+                let status = child.wait().ok();
+
+                if cancelled {
+                    return Ok("Command execution cancelled by user".to_string());
+                }
+
+                if let Some(status) = status {
+                    if status.success() {
+                        if result.is_empty() {
+                            Ok("Command executed successfully (no output)".to_string())
+                        } else {
+                            Ok(result.trim().to_string())
+                        }
                     } else {
-                        Ok(result.trim().to_string())
+                        Ok(format!(
+                            "Command exited with code {:?}\n{}",
+                            status.code(),
+                            result.trim()
+                        ))
                     }
                 } else {
-                    Ok(format!(
-                        "Command exited with code {:?}\n{}",
-                        output.status.code(),
-                        result.trim()
-                    ))
+                    Ok(result.trim().to_string())
                 }
             }
             _ => {
@@ -1485,11 +1652,17 @@ impl ChatApp {
 
             match trimmed.to_lowercase().as_str() {
                 "exit" | "quit" | "q" => {
+                    if let Some(ref workspace) = self.workspace {
+                        save_history(workspace, &self.history);
+                    }
                     println!("\n{}", "Goodbye! 👋".green());
                     break;
                 }
                 "clear" => {
                     self.history.clear();
+                    if let Some(ref workspace) = self.workspace {
+                        save_history(workspace, &self.history);
+                    }
                     println!("{}", "Conversation history cleared.".yellow());
                     continue;
                 }
@@ -1504,6 +1677,11 @@ impl ChatApp {
                 eprintln!("\n{} {}", "Error:".red(), e);
             }
             println!();
+
+            // Save history after each message exchange
+            if let Some(ref workspace) = self.workspace {
+                save_history(workspace, &self.history);
+            }
         }
 
         Ok(())

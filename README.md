@@ -7,7 +7,7 @@ A minimal CLI chat client for OpenAI-compatible APIs with workspace and MCP supp
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 [![Build Release](https://github.com/skorotkiewicz/undead/actions/workflows/build.yml/badge.svg)](https://github.com/skorotkiewicz/undead/actions/workflows/build.yml)
 
-![intro.png](docs/intro.png)
+![intro.png](docs/intro_new.png)
 
 ## Installation
 
