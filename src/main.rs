@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow, bail};
 use clap::Parser;
 use colored::Colorize;
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal;
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -977,7 +977,6 @@ impl ChatApp {
                 let stdout = child.stdout.take();
                 let stderr = child.stderr.take();
 
-                // Use Arc for thread-safe cancellation flag
                 let cancelled_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let cancelled_flag_clone = cancelled_flag.clone();
                 let pid_clone = pid;
@@ -1027,9 +1026,15 @@ impl ChatApp {
                     let _ = terminal::disable_raw_mode();
                 });
 
+                println!();
+
+                for _ in 0..10 {
+                    println!();
+                }
+
                 if let Some(stdout) = stdout {
                     let reader = BufReader::new(stdout);
-                    let mut recent_lines = std::collections::VecDeque::with_capacity(10);
+                    let mut recent_lines = std::collections::VecDeque::with_capacity(7);
 
                     for line in reader.lines() {
                         if cancelled_flag.load(std::sync::atomic::Ordering::SeqCst) {
@@ -1042,14 +1047,12 @@ impl ChatApp {
                             }
                             recent_lines.push_back(line.clone());
 
-                            // Move cursor up 10 lines
                             if recent_lines.len() > 1 {
                                 print!("\x1B[{}A", recent_lines.len());
                             }
 
-                            // Reprint all recent lines
                             for l in &recent_lines {
-                                print!("\x1B[2K"); // Clear current line
+                                print!("\x1B[2K");
                                 println!(":  {}\r", l.dimmed());
                             }
 
@@ -1273,28 +1276,68 @@ impl ChatApp {
                 tools: self.tools.clone(),
             };
 
+            let mut full_response = String::new();
+            let cancelled_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+            let cancelled_flag_clone = cancelled_flag.clone();
+            let key_thread = std::thread::spawn(move || {
+                let _ = terminal::enable_raw_mode();
+                loop {
+                    if cancelled_flag_clone.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
+                    if event::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
+                        if let Ok(Event::Key(key)) = event::read() {
+                            if key.code == KeyCode::Char('c')
+                                && key.modifiers == KeyModifiers::CONTROL
+                            {
+                                cancelled_flag_clone
+                                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                                let _ = cancel_tx.send(());
+                                break;
+                            }
+                        }
+                    }
+                }
+                let _ = terminal::disable_raw_mode();
+            });
+
             let endpoint = format!("{}/chat/completions", self.args.endpoint);
-            let response = self
+            let request_future = self
                 .client
                 .post(&endpoint)
                 .headers(self.build_headers())
                 .json(&request)
-                .send()
-                .await?;
+                .send();
+
+            let response = tokio::select! {
+                result = request_future => result?,
+                _ = &mut cancel_rx => {
+                    println!("\r\x1B[K{}", "[Cancelled]".yellow());
+                    cancelled_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let _ = key_thread.join();
+                    return Ok(full_response);
+                }
+            };
 
             if !response.status().is_success() {
                 let error_text = response.text().await?;
                 return Err(anyhow!("API error: {}", error_text));
             }
 
-            // Process streaming response
-            let mut full_response = String::new();
             let mut tool_calls: Vec<ToolCall> = Vec::new();
             let mut stream = response.bytes_stream();
             let mut buffer = String::new();
-            let mut first_content = true; // Track if we've received any content yet
+            let mut first_content = true;
 
             while let Some(chunk) = stream.next().await {
+                if cancelled_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    println!("\n{}", "[Cancelled]".yellow());
+                    cancelled_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let _ = key_thread.join();
+                    return Ok(full_response);
+                }
                 let chunk = chunk?;
                 let chunk_str = String::from_utf8_lossy(&chunk);
                 buffer.push_str(&chunk_str);
@@ -1379,7 +1422,10 @@ impl ChatApp {
                 }
             }
 
-            println!(); // New line after response
+            cancelled_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = key_thread.join();
+
+            println!();
 
             // If there are tool calls, execute them and continue the conversation
             if !tool_calls.is_empty() {
