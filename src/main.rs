@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow, bail};
 use clap::Parser;
 use colored::Colorize;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode};
 use crossterm::terminal;
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -10,6 +10,10 @@ use rmcp::service::RunningService;
 use rmcp::transport::TokioChildProcess;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransport;
 use rmcp::{Peer, RoleClient, Service, serve_client};
+use rustyline::config::Configurer;
+use rustyline::error::ReadlineError;
+use rustyline::history::DefaultHistory;
+use rustyline::{CompletionType, EditMode, Editor};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
@@ -395,6 +399,7 @@ struct ChatApp {
     workspace: Option<PathBuf>,
     mcp_clients: Arc<RwLock<Vec<McpClient>>>,
     agent_context: Option<AgentContext>,
+    rl: Editor<(), DefaultHistory>,
 }
 
 impl McpClient {
@@ -472,11 +477,14 @@ impl ChatApp {
         let tools = workspace.as_ref().map(|_| Self::build_tools());
         let agent_context = workspace.as_ref().map(|w| AgentContext::load(w));
 
-        // Load history from workspace/.agent/HISTORY.log
         let history = workspace
             .as_ref()
             .map(|w| load_history(w))
             .unwrap_or_default();
+
+        let mut rl = Editor::new().expect("Failed to create readline editor");
+        rl.set_completion_type(CompletionType::List);
+        rl.set_edit_mode(EditMode::Emacs);
 
         Self {
             client: Client::new(),
@@ -486,6 +494,7 @@ impl ChatApp {
             workspace,
             mcp_clients: Arc::new(RwLock::new(Vec::new())),
             agent_context,
+            rl,
         }
     }
 
@@ -1181,125 +1190,42 @@ impl ChatApp {
         headers
     }
 
-    fn read_input_with_ctrl_e(&self) -> Result<String> {
-        // Enable raw mode to detect key presses
-        terminal::enable_raw_mode()?;
-
-        let mut input = String::new();
-        let mut cursor_pos = 0usize;
-        let mut editor_opened = false;
-
-        // Helper to redraw the input line
-        let redraw = |input: &str, cursor_pos: usize| {
-            // Move to beginning of line, clear to end, print prompt and input
-            print!("\r\x1B[K{} ", "You:".cyan().bold());
-            print!("{}", input);
-            // Move cursor to correct position
-            if cursor_pos < input.len() {
-                let move_left = input.len() - cursor_pos;
-                print!("\x1B[{}D", move_left);
-            }
-            io::stdout().flush().ok();
-        };
-
+    fn read_input(&mut self) -> Result<String> {
         loop {
-            if event::poll(std::time::Duration::from_millis(100))? {
-                match event::read()? {
-                    Event::Key(key) => {
-                        match (key.modifiers, key.code) {
-                            // Ctrl+E: open editor
-                            (KeyModifiers::CONTROL, KeyCode::Char('e')) => {
-                                terminal::disable_raw_mode()?;
-                                println!("\n{}", "Opening editor...".yellow());
-
-                                match open_editor() {
-                                    Ok(content) => {
-                                        if !content.is_empty() {
-                                            input = content;
-                                            cursor_pos = input.len();
-                                            editor_opened = true;
-                                        }
-                                    }
-                                    Err(e) => {
-                                        eprintln!("{} {}", "Error:".red(), e);
-                                    }
-                                }
-
-                                // Re-enable raw mode to continue reading
-                                terminal::enable_raw_mode()?;
-                            }
-                            // Ctrl+C: exit
-                            (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
-                                terminal::disable_raw_mode()?;
-                                println!("\n{}", "Goodbye! 👋".green());
-                                std::process::exit(0);
-                            }
-                            // Enter: submit input
-                            (_, KeyCode::Enter) => {
-                                terminal::disable_raw_mode()?;
-                                println!();
-                                return Ok(input);
-                            }
-                            // Backspace
-                            (_, KeyCode::Backspace) => {
-                                if cursor_pos > 0 {
-                                    input.remove(cursor_pos - 1);
-                                    cursor_pos -= 1;
-                                    redraw(&input, cursor_pos);
-                                }
-                            }
-                            // Delete
-                            (_, KeyCode::Delete) => {
-                                if cursor_pos < input.len() {
-                                    input.remove(cursor_pos);
-                                    redraw(&input, cursor_pos);
-                                }
-                            }
-                            // Left arrow
-                            (_, KeyCode::Left) => {
-                                if cursor_pos > 0 {
-                                    cursor_pos -= 1;
-                                    redraw(&input, cursor_pos);
-                                }
-                            }
-                            // Right arrow
-                            (_, KeyCode::Right) => {
-                                if cursor_pos < input.len() {
-                                    cursor_pos += 1;
-                                    redraw(&input, cursor_pos);
-                                }
-                            }
-                            // Home
-                            (_, KeyCode::Home) => {
-                                cursor_pos = 0;
-                                redraw(&input, cursor_pos);
-                            }
-                            // End
-                            (_, KeyCode::End) => {
-                                cursor_pos = input.len();
-                                redraw(&input, cursor_pos);
-                            }
-                            // Regular character
-                            (_, KeyCode::Char(c)) => {
-                                if cursor_pos == input.len() {
-                                    input.push(c);
-                                } else {
-                                    input.insert(cursor_pos, c);
-                                }
-                                cursor_pos += 1;
-                                redraw(&input, cursor_pos);
-                            }
-                            _ => {}
-                        }
+            let prompt = format!("{} ", "You:".cyan().bold());
+            match self.rl.readline(&prompt) {
+                Ok(line) => {
+                    let line = line.trim().to_string();
+                    if line.is_empty() {
+                        continue;
                     }
-                    _ => {}
+                    if line == "\\e" {
+                        println!("{}", "Opening editor...".yellow());
+                        match open_editor() {
+                            Ok(content) => {
+                                if !content.is_empty() {
+                                    return Ok(content);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("{} {}", "Error:".red(), e);
+                            }
+                        }
+                        continue;
+                    }
+                    return Ok(line);
                 }
-            }
-
-            // If editor was opened and we have content, return it
-            if editor_opened && !input.is_empty() {
-                terminal::disable_raw_mode()?;
-                return Ok(input);
+                Err(ReadlineError::Interrupted) => {
+                    println!("{}", "^C".dimmed());
+                    continue;
+                }
+                Err(ReadlineError::Eof) => {
+                    println!("{}", "Goodbye! 👋".green());
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    return Err(anyhow!("Readline error: {}", e));
+                }
             }
         }
     }
@@ -1570,21 +1496,20 @@ impl ChatApp {
         println!("{}", "Type your message and press Enter to chat.".dimmed());
         println!(
             "{}",
-            "Type 'exit', 'quit', or press Ctrl+C to exit.".dimmed()
+            "Type 'exit', 'quit', or press Ctrl+D to exit.".dimmed()
         );
         println!("{}", "Type 'clear' to clear conversation history.".dimmed());
         println!(
             "{}",
-            "Press Ctrl+E to open editor for multi-line input.".dimmed()
+            "Type '\\e' to open editor for multi-line input.".dimmed()
         );
         println!();
 
         loop {
-            // Check for Ctrl+E before normal input
-            print!("{} ", "You:".cyan().bold());
-            io::stdout().flush()?;
+            // print!("{} ", "You:".cyan().bold());
+            // io::stdout().flush()?;
 
-            let input = self.read_input_with_ctrl_e()?;
+            let input = self.read_input()?;
 
             let trimmed = input.trim();
 
