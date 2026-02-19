@@ -1278,30 +1278,41 @@ impl ChatApp {
 
             let mut full_response = String::new();
             let cancelled_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let streaming_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
 
+            let _ = terminal::enable_raw_mode();
+            print!(
+                "\r\x1B[K{} {}",
+                "Assistant:".green().bold(),
+                "thinking...".dimmed().italic()
+            );
+            io::stdout().flush().ok();
+
             let cancelled_flag_clone = cancelled_flag.clone();
-            let key_thread = std::thread::spawn(move || {
-                let _ = terminal::enable_raw_mode();
-                loop {
-                    if cancelled_flag_clone.load(std::sync::atomic::Ordering::SeqCst) {
-                        break;
-                    }
-                    if event::poll(std::time::Duration::from_millis(100)).unwrap_or(false) {
-                        if let Ok(Event::Key(key)) = event::read() {
-                            if key.code == KeyCode::Char('c')
-                                && key.modifiers == KeyModifiers::CONTROL
-                            {
-                                cancelled_flag_clone
-                                    .store(true, std::sync::atomic::Ordering::SeqCst);
-                                let _ = cancel_tx.send(());
-                                break;
+            let streaming_done_clone = streaming_done.clone();
+            let key_thread: Arc<std::sync::Mutex<Option<std::thread::JoinHandle<()>>>> =
+                Arc::new(std::sync::Mutex::new(Some(std::thread::spawn(move || {
+                    loop {
+                        if cancelled_flag_clone.load(std::sync::atomic::Ordering::SeqCst)
+                            || streaming_done_clone.load(std::sync::atomic::Ordering::SeqCst)
+                        {
+                            break;
+                        }
+                        if event::poll(std::time::Duration::from_millis(50)).unwrap_or(false) {
+                            if let Ok(Event::Key(key)) = event::read() {
+                                if key.code == KeyCode::Char('c')
+                                    && key.modifiers == KeyModifiers::CONTROL
+                                {
+                                    cancelled_flag_clone
+                                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                                    let _ = cancel_tx.send(());
+                                    break;
+                                }
                             }
                         }
                     }
-                }
-                let _ = terminal::disable_raw_mode();
-            });
+                }))));
 
             let endpoint = format!("{}/chat/completions", self.args.endpoint);
             let request_future = self
@@ -1314,9 +1325,12 @@ impl ChatApp {
             let response = tokio::select! {
                 result = request_future => result?,
                 _ = &mut cancel_rx => {
-                    println!("\r\x1B[K{}", "[Cancelled]".yellow());
+                    let _ = terminal::disable_raw_mode();
+                    print!("\r\x1B[K{}\r\n", "[Cancelled]".yellow());
                     cancelled_flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                    let _ = key_thread.join();
+                    if let Some(handle) = key_thread.lock().unwrap().take() {
+                        let _ = handle.join();
+                    }
                     return Ok(full_response);
                 }
             };
@@ -1333,9 +1347,12 @@ impl ChatApp {
 
             while let Some(chunk) = stream.next().await {
                 if cancelled_flag.load(std::sync::atomic::Ordering::SeqCst) {
-                    println!("\n{}", "[Cancelled]".yellow());
-                    cancelled_flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                    let _ = key_thread.join();
+                    let _ = terminal::disable_raw_mode();
+                    print!("\r\x1B[K{}\r\n", "[Cancelled]".yellow());
+                    streaming_done.store(true, std::sync::atomic::Ordering::SeqCst);
+                    if let Some(handle) = key_thread.lock().unwrap().take() {
+                        let _ = handle.join();
+                    }
                     return Ok(full_response);
                 }
                 let chunk = chunk?;
@@ -1357,22 +1374,20 @@ impl ChatApp {
                             if let Some(choice) = stream_response.choices.first() {
                                 // Handle content
                                 if let Some(content) = &choice.delta.content {
-                                    // Clear "thinking..." on first content
                                     if first_content {
-                                        print!("\r{} ", "Assistant:".green().bold());
+                                        print!("\r\x1B[K{} ", "Assistant:".green().bold());
                                         io::stdout().flush()?;
                                         first_content = false;
                                     }
-                                    print!("{}", content);
+                                    let output = content.replace('\n', "\r\n");
+                                    print!("{}", output);
                                     io::stdout().flush()?;
                                     full_response.push_str(content);
                                 }
 
-                                // Handle tool calls
                                 if let Some(delta_tool_calls) = &choice.delta.tool_calls {
-                                    // Clear "thinking..." if tool calls arrive first
                                     if first_content {
-                                        print!("\r{} ", "Assistant:".green().bold());
+                                        print!("\r\x1B[K{} ", "Assistant:".green().bold());
                                         io::stdout().flush()?;
                                         first_content = false;
                                     }
@@ -1422,8 +1437,11 @@ impl ChatApp {
                 }
             }
 
-            cancelled_flag.store(true, std::sync::atomic::Ordering::SeqCst);
-            let _ = key_thread.join();
+            streaming_done.store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Some(handle) = key_thread.lock().unwrap().take() {
+                let _ = handle.join();
+            }
+            let _ = terminal::disable_raw_mode();
 
             println!();
 
@@ -1468,8 +1486,11 @@ impl ChatApp {
                 }
 
                 // println!("{}", "Processing results...".yellow().bold());
-                print!("{} ", "Assistant:".green().bold());
-                print!("{}", "thinking...".dimmed().italic());
+                print!(
+                    "\r\x1B[K{} {}",
+                    "Assistant:".green().bold(),
+                    "thinking...".dimmed().italic()
+                );
                 io::stdout().flush()?;
 
                 // Continue the loop to get the next response
@@ -1582,12 +1603,8 @@ impl ChatApp {
                 _ => {}
             }
 
-            print!("{} ", "Assistant:".green().bold());
-            print!("{}", "thinking...".dimmed().italic());
-            io::stdout().flush()?;
-
             if let Err(e) = self.send_message(trimmed).await {
-                eprintln!("\n{} {}", "Error:".red(), e);
+                eprintln!("\r\n{} {}", "Error:".red(), e);
             }
             println!();
 
